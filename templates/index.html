@@ -27,10 +27,10 @@
 
     <div class="flex justify-center mt-2 px-4">
         <div role="tablist" class="tabs tabs-boxed w-full font-bold">
-            <a role="tab" class="tab tab-active" onclick="switchTab('live', this)">🔥 สนาม</a>
-            <a role="tab" class="tab" onclick="switchTab('events', this)">📅 จอง</a>
-            <a role="tab" class="tab hidden staff-only" onclick="switchTab('billing', this)">💰 เงิน</a>
-            <a role="tab" class="tab hidden super-only" onclick="switchTab('super', this)">👑 Mod</a>
+            <a role="tab" class="tab tab-active" onclick="switchTab('live', this)">สนาม</a>
+            <a role="tab" class="tab" onclick="switchTab('events', this)">ลงชื่อ</a>
+            <a role="tab" class="tab hidden staff-only" onclick="switchTab('billing', this)">คิดตัง</a>
+            <a role="tab" class="tab hidden super-only" onclick="switchTab('super', this)">บอส</a>
         </div>
     </div>
 
@@ -87,7 +87,7 @@
 
     <div id="tab-super" class="p-4 max-w-md mx-auto hidden">
         <div class="card bg-white shadow-xl p-4">
-            <h2 class="card-title text-purple-600 mb-4">👑 จัดการ Moderator</h2>
+            <h2 class="card-title text-purple-600 mb-4">จัดการ Moderator</h2>
             <p class="text-xs text-gray-500 mb-2">เลือกผู้เล่นเพื่อแต่งตั้ง/ปลดตำแหน่ง Mod</p>
             <select id="all-players-select" class="select select-bordered w-full mb-2"></select>
             <button onclick="toggleMod()" class="btn btn-neutral w-full mb-4">แต่งตั้ง / ปลด</button>
