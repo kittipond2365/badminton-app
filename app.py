@@ -25,12 +25,13 @@ default_db = {
     "match_history": [],
     "billing_history": []
 }
-active_courts = {} 
+active_courts = {}
 
 def load_data():
     global db, active_courts
     if not os.path.exists(DATA_FILE):
-        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+        if not os.path.exists(os.path.dirname(DATA_FILE)):
+            os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         db = default_db.copy()
         save_data()
     else:
@@ -43,7 +44,7 @@ def load_data():
                         db[k] = default_db[k]
                 if "system_settings" not in db:
                     db["system_settings"] = default_db["system_settings"]
-        except: 
+        except:
             db = default_db.copy()
             save_data()
     refresh_courts()
@@ -52,7 +53,7 @@ def save_data():
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(db, f, ensure_ascii=False, indent=4)
-    except: 
+    except:
         pass
 
 def refresh_courts():
@@ -101,10 +102,10 @@ def calculate_smart_stats(uid):
             my_team = 'A' if is_team_a else 'B'
             is_winner = (m.get('winner_team') == my_team)
             
-            if is_winner: 
+            if is_winner:
                 wins += 1
                 current_streak += 1
-            else: 
+            else:
                 current_streak = 0
             if current_streak > max_streak:
                 max_streak = current_streak
@@ -129,7 +130,7 @@ def calculate_smart_stats(uid):
                 opponents[pid]['played'] += 1
                 if not is_winner:
                     opponents[pid]['lost'] += 1
-            
+        
         best_partner = "-"
         best_wr = -1
         for pid, d in partners.items():
@@ -194,6 +195,7 @@ def login():
 @app.route('/api/get_dashboard')
 def get_dashboard():
     try:
+        # Courts
         c_data = {}
         for cid, m in active_courts.items():
             if m: 
@@ -214,6 +216,7 @@ def get_dashboard():
                         })
             c_data[cid] = m
 
+        # Process Players
         players_list = []
         for p in db['players'].values():
             try:
@@ -231,11 +234,14 @@ def get_dashboard():
             p['rank_title'] = get_rank_title(mmr)
             players_list.append(p)
 
+        # Queue
         active = [p for p in players_list if p.get('status') in ['active','playing']]
         active.sort(key=lambda x: x['last_active'])
 
+        # Leaderboard
         lb = sorted(players_list, key=lambda x: x['mmr'], reverse=True)
         
+        # Events
         event_list = []
         for eid, e in db['events'].items():
             joined_users = []
@@ -248,6 +254,7 @@ def get_dashboard():
                     })
             e['joined_users'] = joined_users
             
+            # Safe Sort Key
             raw_dt = e.get('datetime', 0)
             if raw_dt is None:
                 e['sort_key'] = 0
@@ -257,11 +264,16 @@ def get_dashboard():
                 except:
                     e['sort_key'] = 0
             else:
-                e['sort_key'] = float(raw_dt)
+                try:
+                    e['sort_key'] = float(raw_dt)
+                except:
+                    e['sort_key'] = 0
+            
             event_list.append(e)
         
-        event_list.sort(key=lambda x: x['sort_key'])
+        event_list.sort(key=lambda x: x.get('sort_key', 0))
 
+        # All Players Data
         all_players_data = []
         for p in players_list:
             all_players_data.append({
@@ -286,6 +298,7 @@ def get_dashboard():
         })
     except Exception as e:
         print(f"DASHBOARD ERROR: {e}")
+        # Return empty structure instead of crashing
         return jsonify({
             "system": {}, "courts": {}, "queue": [], "queue_count": 0,
             "events": [], "leaderboard": [], "match_history": [], "all_players": []
@@ -352,6 +365,7 @@ def matchmake():
                 queue_time = max(float(p.get('last_active',0)), float(partner.get('last_active',0)))
             except:
                 queue_time = time.time()
+            
             groups.append({
                 "type": "pair",
                 "members": [p, partner],
@@ -430,10 +444,12 @@ def submit_result():
     m = active_courts.get(cid)
     if not m: return jsonify({"error":"No match"})
     
-    is_staff = (req_uid == SUPER_ADMIN_ID) or (req_uid in db['mod_ids'])
+    is_mod = req_uid in db['mod_ids']
+    is_super = req_uid == SUPER_ADMIN_ID
     is_player = (req_uid in m.get('team_a_ids', [])) or (req_uid in m.get('team_b_ids', []))
     
-    if not (is_staff or is_player): return jsonify({"error": "Unauthorized"}), 403
+    if not (is_super or is_mod or is_player):
+        return jsonify({"error": "Unauthorized"}), 403
     
     mmr_snapshot = {}
     win_ids = m['team_a_ids'] if winner=='A' else m['team_b_ids']
@@ -599,6 +615,7 @@ def reset_system():
 def create_event():
     d = request.json
     eid = str(uuid.uuid4())[:8]
+    
     db['events'][eid] = {
         "id": eid,
         "name": d['name'],
