@@ -7,51 +7,59 @@
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
 </head>
-<body class="bg-gray-100 min-h-screen pb-20">
+<body class="bg-gray-100 min-h-screen pb-24">
 
     <div class="navbar bg-white shadow-sm px-4 sticky top-0 z-50">
         <div class="flex-1">
-            <span class="text-xl font-bold text-blue-600">🏸 Ize'Squad</span>
+            <span class="text-xl font-bold text-blue-600">🏸 GANG BAD</span>
         </div>
         <div class="flex-none gap-2">
             <div class="text-right mr-2">
                 <div id="user-role-badge"></div>
-                <div class="badge badge-neutral badge-sm" id="user-mmr">...</div>
+                <div class="badge badge-neutral badge-sm font-bold" id="user-rank-title">...</div>
             </div>
-            <div class="avatar">
-                <div class="w-10 rounded-full"><img id="user-img" src="https://ui-avatars.com/api/?name=U" /></div>
+            <div onclick="editProfileModal()" class="avatar cursor-pointer">
+                <div class="w-10 rounded-full ring ring-primary ring-offset-base-100 ring-offset-2">
+                    <img id="user-img" src="https://ui-avatars.com/api/?name=U" />
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="flex justify-center mt-2 px-4">
-        <div role="tablist" class="tabs tabs-boxed w-full font-bold">
-            <a role="tab" class="tab tab-active" onclick="switchTab('live', this)">สนาม</a>
-            <a role="tab" class="tab" onclick="switchTab('events', this)">ลงชื่อ</a>
-            <a role="tab" class="tab hidden staff-only" onclick="switchTab('billing', this)">คิดตัง</a>
-            <a role="tab" class="tab hidden super-only" onclick="switchTab('super', this)">บอส</a>
+    <div class="flex justify-center mt-2 px-2 overflow-x-auto">
+        <div role="tablist" class="tabs tabs-boxed w-full font-bold text-xs sm:text-sm">
+            <a role="tab" class="tab tab-active" onclick="switchTab('live', this)">สนามแข่ง</a>
+            <a role="tab" class="tab" onclick="switchTab('upcoming', this)">Upcoming</a>
+            <a role="tab" class="tab" onclick="switchTab('billing', this)">ค่าใช้จ่าย</a>
+            <a role="tab" class="tab" onclick="switchTab('history', this)">ประวัติ</a>
+            <a role="tab" class="tab" onclick="switchTab('leaderboard', this)">อันดับ</a>
+            <a role="tab" class="tab hidden super-only text-purple-600" onclick="switchTab('super', this)">Mod</a>
         </div>
     </div>
 
     <div id="tab-live" class="p-4 max-w-md mx-auto">
         <div class="card bg-white shadow-md mb-4 border-l-4 border-primary">
             <div class="card-body p-4 text-center">
-                <h3 class="font-bold text-gray-700">จุดลงทะเบียน</h3>
-                <div id="status-text" class="text-sm text-gray-500 mb-2">สถานะ: ...</div>
-                <button id="btn-action" onclick="toggleStatus()" class="btn btn-primary w-full">Check-in</button>
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="font-bold text-gray-700">จุดลงทะเบียน</h3>
+                    <span id="status-text" class="text-xs badge badge-ghost">...</span>
+                </div>
+                <button id="btn-action" onclick="toggleStatus()" class="btn btn-primary w-full">ลงชื่อเข้าสนาม</button>
             </div>
         </div>
 
         <div class="flex justify-between items-center mb-2">
-            <h2 class="text-lg font-bold">สนาม (Live)</h2>
+            <h2 class="text-lg font-bold">Live Court 🔴</h2>
             <div id="court-ctrl" class="hidden join staff-only">
                 <button onclick="changeCourts(-1)" class="btn btn-xs join-item">-</button>
                 <button class="btn btn-xs join-item bg-gray-200">Court</button>
                 <button onclick="changeCourts(1)" class="btn btn-xs join-item">+</button>
             </div>
         </div>
-        <div id="courts-container" class="space-y-3 mb-6"></div>
+        
+        <div id="courts-container" class="space-y-4 mb-6"></div>
 
         <div id="match-btn" class="hidden staff-only mb-6">
             <button onclick="triggerMatchmake()" class="btn btn-accent w-full font-bold shadow text-white">⚡ จับคู่ (Staff)</button>
@@ -59,173 +67,401 @@
 
         <h2 class="text-lg font-bold mb-2">คิวรอเล่น (<span id="queue-count">0</span>)</h2>
         <div class="bg-white rounded-box shadow overflow-hidden">
-            <table class="table table-xs"><thead><tr><th>ชื่อ</th><th>Rank</th><th>รอ</th></tr></thead><tbody id="queue-list"></tbody></table>
+            <table class="table table-xs">
+                <thead><tr><th>ชื่อ</th><th>Rank</th><th>รอ</th></tr></thead>
+                <tbody id="queue-list"></tbody>
+            </table>
         </div>
     </div>
 
-    <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
+    <div id="tab-upcoming" class="p-4 max-w-md mx-auto hidden">
         <div class="hidden staff-only card bg-base-200 mb-4 p-4">
-            <h3 class="font-bold">สร้างก๊วน</h3>
-            <input id="evt-name" placeholder="ชื่อ" class="input input-sm w-full mb-2">
+            <h3 class="font-bold">สร้างก๊วนใหม่</h3>
+            <input id="evt-name" placeholder="ชื่อก๊วน" class="input input-sm w-full mb-2">
             <input type="datetime-local" id="evt-time" class="input input-sm w-full mb-2">
-            <button onclick="createEvent()" class="btn btn-sm btn-primary w-full">สร้าง</button>
+            <button onclick="createEvent()" class="btn btn-sm btn-primary w-full">สร้าง Event</button>
         </div>
         <div id="events-container" class="space-y-3"></div>
     </div>
 
     <div id="tab-billing" class="p-4 max-w-md mx-auto hidden">
-        <div class="card bg-white shadow-xl p-4">
-            <h2 class="card-title text-green-600 mb-4">คิดเงิน (Staff)</h2>
-            <div class="mb-2"><label class="label font-bold">ยอดรวม (บาท)</label><input type="number" id="bill-total" class="input input-bordered w-full"></div>
-            <div class="flex gap-2 mb-4"><input type="number" id="def-hr" value="2" class="input input-bordered w-1/2" placeholder="ชม"><input type="number" id="def-min" value="0" class="input input-bordered w-1/2" placeholder="น"></div>
-            <button onclick="prepBill()" class="btn btn-primary btn-sm w-full mb-4">ดึงรายชื่อ</button>
-            <div id="bill-inputs" class="space-y-2 mb-4 max-h-60 overflow-y-auto"></div>
-            <button onclick="calcBill()" class="btn btn-success text-white w-full">คำนวณ</button>
-            <div id="bill-res" class="hidden mt-4 bg-green-50 p-2 rounded"><table class="table table-xs w-full"><tbody id="bill-body"></tbody></table></div>
+        
+        <div class="card bg-white shadow-xl p-4 mb-6">
+            <h2 class="card-title text-green-600 mb-4">💰 คำนวณค่าก๊วน</h2>
+            <div class="mb-2">
+                <label class="label font-bold">ค่าใช้จ่ายรวม (บาท)</label>
+                <input type="number" id="bill-total" class="input input-bordered w-full" placeholder="0.00">
+            </div>
+            
+            <div class="divider text-xs">เวลาเหมาจ่าย (ค่าตั้งต้น)</div>
+            <div class="flex gap-2 mb-4">
+                <input type="number" id="def-hr" value="2" class="input input-bordered w-1/2" placeholder="ชม">
+                <input type="number" id="def-min" value="0" class="input input-bordered w-1/2" placeholder="น">
+            </div>
+
+            <button onclick="prepBill()" class="btn btn-primary btn-sm w-full mb-4">ดึงรายชื่อผู้เล่นวันนี้</button>
+            
+            <div id="bill-inputs" class="space-y-2 mb-4 max-h-60 overflow-y-auto hidden"></div>
+            
+            <button onclick="calcBill()" class="btn btn-success text-white w-full mb-2">คำนวณยอด</button>
+            
+            <div id="bill-res" class="hidden bg-green-50 p-3 rounded border border-green-200">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-xs text-gray-500">ตกชั่วโมงละ <b id="rate-display"></b> บาท</span>
+                </div>
+                <table class="table table-xs w-full mb-2">
+                    <tbody id="bill-body"></tbody>
+                </table>
+                <button onclick="saveBillHistory()" class="btn btn-sm btn-outline btn-success w-full staff-only hidden" id="btn-save-bill">บันทึกบิลลงประวัติ</button>
+            </div>
+        </div>
+
+        <h3 class="font-bold text-gray-500 mb-2">📅 ประวัติค่าใช้จ่าย (History)</h3>
+        <div id="billing-history-container" class="space-y-2"></div>
+    </div>
+
+    <div id="tab-history" class="p-4 max-w-md mx-auto hidden">
+        <div role="tablist" class="tabs tabs-boxed mb-4">
+            <a role="tab" class="tab tab-active" onclick="switchHist('all', this)">รวมทุกแมตช์</a>
+            <a role="tab" class="tab" onclick="switchHist('my', this)">เฉพาะฉัน</a>
+        </div>
+        <div id="hist-list" class="space-y-2"></div>
+    </div>
+
+    <div id="tab-leaderboard" class="p-4 max-w-md mx-auto hidden">
+        <h2 class="text-center font-bold text-xl mb-4 text-yellow-600">🏆 Leaderboard</h2>
+        <div class="overflow-x-auto bg-white rounded-box shadow">
+            <table class="table w-full">
+                <thead><tr><th>#</th><th>ผู้เล่น</th><th class="text-right">MMR</th></tr></thead>
+                <tbody id="lb-list"></tbody>
+            </table>
         </div>
     </div>
 
     <div id="tab-super" class="p-4 max-w-md mx-auto hidden">
         <div class="card bg-white shadow-xl p-4">
-            <h2 class="card-title text-purple-600 mb-4">จัดการ Moderator</h2>
-            <p class="text-xs text-gray-500 mb-2">เลือกผู้เล่นเพื่อแต่งตั้ง/ปลดตำแหน่ง Mod</p>
+            <h2 class="card-title text-purple-600">จัดการ Mod</h2>
             <select id="all-players-select" class="select select-bordered w-full mb-2"></select>
-            <button onclick="toggleMod()" class="btn btn-neutral w-full mb-4">แต่งตั้ง / ปลด</button>
-            
-            <h3 class="font-bold">รายชื่อ Mod ปัจจุบัน</h3>
-            <ul id="mod-list" class="list-disc pl-5 text-sm mt-2"></ul>
+            <button onclick="toggleMod()" class="btn btn-neutral w-full mb-4">แต่งตั้ง / ปลด Mod</button>
             
             <div class="divider"></div>
-            <h3 class="font-bold text-red-500">🔧 แก้ Rank (Staff)</h3>
+            <h3 class="font-bold text-red-500">แก้ Rank (Staff)</h3>
             <select id="rank-select" class="select select-bordered w-full mb-2"></select>
-            <div class="join w-full"><input type="number" id="new-rank" class="input input-bordered join-item w-full" placeholder="Rank"><button onclick="setRank()" class="btn btn-error join-item">Save</button></div>
-            
-            <div class="divider"></div>
-            <p class="text-xs text-center text-gray-300">My ID: <span id="my-id-display"></span></p>
+            <div class="join w-full">
+                <input type="number" id="new-rank" class="input input-bordered join-item w-full" placeholder="New MMR">
+                <button onclick="setRank()" class="btn btn-error join-item text-white">Save</button>
+            </div>
         </div>
     </div>
 
     <dialog id="modal_finish" class="modal">
         <div class="modal-box text-center">
-            <h3 class="font-bold">จบเกม Court <span id="md-cid"></span></h3>
-            <p class="py-4">ใครชนะ?</p>
-            <div class="flex justify-center gap-4"><button onclick="subRes('A')" class="btn btn-primary">Team A</button><button onclick="subRes('B')" class="btn btn-error text-white">Team B</button></div>
+            <h3 class="font-bold text-lg">จบเกม Court <span id="md-cid"></span></h3>
+            <p class="py-4">ทีมไหนชนะ?</p>
+            <div class="flex justify-center gap-4">
+                <button onclick="subRes('A')" class="btn btn-primary w-24">Team A</button>
+                <button onclick="subRes('B')" class="btn btn-error text-white w-24">Team B</button>
+            </div>
         </div>
         <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>
 
+    <dialog id="modal_profile" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg">แก้ไขโปรไฟล์</h3>
+            <div class="form-control w-full max-w-xs mx-auto mt-4">
+                <label class="label"><span class="label-text">ชื่อเล่น (แสดงในระบบ)</span></label>
+                <input type="text" id="my-nickname" class="input input-bordered w-full" />
+            </div>
+            <div class="modal-action">
+                <button onclick="saveProfile()" class="btn btn-primary">บันทึก</button>
+                <form method="dialog"><button class="btn">ปิด</button></form>
+            </div>
+        </div>
+    </dialog>
+
     <script>
-        const LIFF_ID = "2009064792-6RT6YKWO"; // <--- ใส่ LIFF ID ตรงนี้
-        let user = null; let selCid=null;
+        const LIFF_ID = "2009064792-6RT6YKWO"; 
+        let user = null; 
+        let selCid = null;
+        let globalData = null; // เก็บข้อมูลทั้งหมดไว้ใช้กรอง History
 
         function switchTab(n, b) {
-            document.querySelectorAll('.tab').forEach(t=>t.classList.remove('tab-active')); b.classList.add('tab-active');
-            ['live','events','billing','super'].forEach(t=>document.getElementById('tab-'+t).classList.add('hidden'));
+            document.querySelectorAll('#tablist > .tab').forEach(t=>t.classList.remove('tab-active')); 
+            if(b) b.classList.add('tab-active'); // Handle optional button
+            ['live','upcoming','billing','history','leaderboard','super'].forEach(t=>document.getElementById('tab-'+t).classList.add('hidden'));
             document.getElementById('tab-'+n).classList.remove('hidden');
         }
 
         async function main() {
             try {
-                await liff.init({liffId:LIFF_ID}); if(!liff.isLoggedIn()){liff.login();return;}
+                await liff.init({liffId:LIFF_ID}); 
+                if(!liff.isLoggedIn()){liff.login();return;}
                 const p = await liff.getProfile();
-                const res = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:p.userId, displayName:p.displayName, pictureUrl:p.pictureUrl})});
+                
+                const res = await fetch('/api/login', {
+                    method:'POST', headers:{'Content-Type':'application/json'}, 
+                    body:JSON.stringify({userId:p.userId, displayName:p.displayName, pictureUrl:p.pictureUrl})
+                });
                 user = await res.json();
                 
                 renderUser();
-                document.getElementById('my-id-display').innerText = user.id;
-
-                // Role Logic
+                
+                // Permission Handling
+                if(user.role === 'super' || user.role === 'mod') {
+                    document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
+                }
                 if(user.role === 'super') {
                     document.querySelectorAll('.super-only').forEach(e=>e.classList.remove('hidden'));
-                    document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
-                    loadAllPlayers();
-                } else if(user.role === 'mod') {
-                    document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
-                    // Mod เห็นหน้าแก้ Rank ได้ด้วย (ยืมหน้า Super แต่ซ่อนส่วน Mod)
-                    document.getElementById('tab-super').innerHTML = document.getElementById('tab-super').innerHTML; // Refresh
-                    // ซ่อนส่วนแต่งตั้ง Mod สำหรับ Mod ธรรมดา
-                    // (ทำง่ายๆ คือให้ Mod เห็นแท็บ Mod แต่ใช้ปุ่มแต่งตั้งไม่ได้ หรือซ่อนเฉพาะส่วนบน)
-                    // เพื่อความง่าย: Mod จะไม่เห็น Tab 'super' แต่เราจะย้าย 'แก้ Rank' มาไว้ที่ Billing หรือทำ Tab แยก
-                    // *แก้ไข* ให้ Mod เห็น Tab 'super' แต่ Backend กันไว้เองถ้ากดแต่งตั้ง
-                    document.getElementById('tab-super').classList.remove('hidden'); // ให้ Mod เข้าไปแก้ Rank
-                    document.querySelector('[onclick="switchTab(\'super\', this)"]').classList.remove('hidden');
+                    loadAllPlayers(); // สำหรับ Super Admin dropdown
+                } else {
+                    // ถ้าเป็น Mod แต่ไม่ใช่ Super ให้โหลด dropdown สำหรับแก้ Rank (แต่ไม่โหลดปุ่มแต่งตั้ง Mod)
+                    if(user.role === 'mod') loadAllPlayers();
                 }
 
-                refresh(); setInterval(refresh, 3000);
-            } catch(e){alert(e)}
+                refresh(); 
+                setInterval(refresh, 3000);
+            } catch(e){ console.error(e); alert("Error: "+e.message)}
         }
 
         function renderUser(){
-            document.getElementById('user-role-badge').innerHTML = user.role=='super'?'<span class="badge badge-warning">Super Admin</span>':(user.role=='mod'?'<span class="badge badge-accent">Mod</span>':'');
-            document.getElementById('user-mmr').innerText = user.mmr;
+            document.getElementById('user-rank-title').innerText = user.rank_title;
             document.getElementById('user-img').src = user.pictureUrl;
-            const b = document.getElementById('btn-action'); const t = document.getElementById('status-text');
-            if(user.status=='active'){b.innerText="Check-out"; b.classList.replace('btn-primary','btn-outline'); t.innerText="🟢 รอคิว";}
-            else if(user.status=='playing'){b.innerText="Playing"; b.disabled=true; t.innerText="🏸 กำลังเล่น";}
-            else{b.innerText="Check-in"; b.classList.replace('btn-outline','btn-primary'); b.disabled=false; t.innerText="⚫ ยังไม่เข้า";}
-        }
-
-        async function toggleStatus(){ 
-            const r=await fetch('/api/toggle_status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})}); 
-            user.status=(await r.json()).status; renderUser(); refresh(); 
+            document.getElementById('my-nickname').value = user.nickname; // ใส่ชื่อปัจจุบันในช่องแก้
+            
+            const b = document.getElementById('btn-action'); 
+            const t = document.getElementById('status-text');
+            if(user.status=='active'){
+                b.innerText="ลงชื่อออก (Check-out)"; b.classList.replace('btn-primary','btn-outline'); 
+                t.innerText="🟢 รอคิว"; t.className="badge badge-success text-white";
+            } else if(user.status=='playing'){
+                b.innerText="กำลังแข่งขัน"; b.disabled=true; 
+                t.innerText="🏸 กำลังหวด"; t.className="badge badge-error text-white";
+            } else{
+                b.innerText="ลงชื่อเข้าสนาม"; b.classList.replace('btn-outline','btn-primary'); b.disabled=false; 
+                t.innerText="⚫ ยังไม่เข้า"; t.className="badge badge-ghost";
+            }
         }
 
         async function refresh(){
-            const d=await(await fetch('/api/get_dashboard')).json();
-            // Courts
+            const d = await(await fetch('/api/get_dashboard')).json();
+            globalData = d; // เก็บไว้ใช้
+            
+            // 1. Live Court (Layout 2 บรรทัด)
             const cc=document.getElementById('courts-container'); cc.innerHTML='';
             for(const[id,m] of Object.entries(d.courts)){
                 if(m){
-                    const min=Math.floor(m.elapsed/60); const sec=m.elapsed%60;
-                    // ปุ่มจบเกม: Admin, Mod, หรือคนเล่น
-                    const canEnd = (user.role==='super' || user.role==='mod' || [...m.team_a,...m.team_b].map(p=>p.id).includes(user.id));
-                    cc.innerHTML+=`<div class="card bg-white shadow p-3 border border-blue-100"><div class="flex justify-between text-xs text-gray-400 mb-1"><span>C${id}</span><span class="text-green-600 font-bold">${min}:${sec<10?'0'+sec:sec}</span></div><div class="flex justify-between items-center"><div class="font-bold text-blue-700 text-sm w-1/3 text-center">${m.team_a.map(p=>p.name.split(' ')[0]).join('/')}</div><div class="italic text-gray-300 font-black">VS</div><div class="font-bold text-red-700 text-sm w-1/3 text-center">${m.team_b.map(p=>p.name.split(' ')[0]).join('/')}</div></div>${canEnd?`<button onclick="selCid=${id};document.getElementById('modal_finish').showModal();document.getElementById('md-cid').innerText=${id}" class="btn btn-xs btn-success w-full mt-2 text-white">จบเกม</button>`:''}</div>`;
-                } else cc.innerHTML+=`<div class="card bg-base-200 p-4 text-center text-gray-400 border border-dashed text-sm">C${id} ว่าง</div>`;
+                    const min=Math.floor(m.elapsed/60); 
+                    const sec=m.elapsed%60;
+                    const canEnd = (user.role!=='user' || [...m.team_a,...m.team_b].map(p=>p.id).includes(user.id));
+                    
+                    cc.innerHTML += `
+                    <div class="card bg-white shadow-lg border border-blue-100 overflow-hidden">
+                        <div class="bg-blue-50 px-4 py-2 flex justify-between items-center">
+                            <span class="font-bold text-blue-800">COURT ${id}</span>
+                            <span class="badge badge-primary badge-outline font-mono">${min}:${sec<10?'0'+sec:sec}</span>
+                        </div>
+                        <div class="p-4">
+                            <div class="flex items-center gap-3 mb-2">
+                                <div class="avatar-group -space-x-3">
+                                    ${m.team_a.map(p=>`<div class="avatar border"><div class="w-8"><img src="${p.pictureUrl}"></div></div>`).join('')}
+                                </div>
+                                <div class="font-bold text-gray-700 truncate">${m.team_a.map(p=>p.nickname).join(', ')}</div>
+                            </div>
+                            <div class="divider my-0 text-xs text-gray-400">VS</div>
+                            <div class="flex items-center gap-3 mt-2">
+                                <div class="avatar-group -space-x-3">
+                                    ${m.team_b.map(p=>`<div class="avatar border"><div class="w-8"><img src="${p.pictureUrl}"></div></div>`).join('')}
+                                </div>
+                                <div class="font-bold text-gray-700 truncate">${m.team_b.map(p=>p.nickname).join(', ')}</div>
+                            </div>
+                            ${canEnd ? `<button onclick="selCid=${id};document.getElementById('modal_finish').showModal();document.getElementById('md-cid').innerText=${id}" class="btn btn-sm btn-error w-full mt-3 text-white">จบเกม</button>` : ''}
+                        </div>
+                    </div>`;
+                } else {
+                    cc.innerHTML+=`<div class="card bg-base-100 border-2 border-dashed border-gray-300 p-6 text-center text-gray-400">Court ${id} ว่าง</div>`;
+                }
             }
-            // Queue & Events
+
+            // 2. Queue
             document.getElementById('queue-count').innerText=d.queue_count;
-            document.getElementById('queue-list').innerHTML=d.queue.map(p=>`<tr><td>${p.name.split(' ')[0]}</td><td>${p.mmr}</td><td>${Math.floor((Date.now()/1000-p.last_active)/60)}m</td></tr>`).join('');
-            document.getElementById('events-container').innerHTML=d.events.map(e=>`<div class="card bg-white shadow-sm border-l-4 border-primary p-3"><h3 class="font-bold">${e.name}</h3><div class="flex justify-between mt-1"><span class="text-xs text-gray-500">${e.datetime.replace('T',' ')} (${e.player_count} คน)</span><button onclick="joinEvt('${e.id}')" class="btn btn-xs btn-outline">Join</button></div></div>`).join('');
-            // Mod List
-            if(d.mods) document.getElementById('mod-list').innerHTML = d.mods.map(m=>`<li>${m.name}</li>`).join('');
+            document.getElementById('queue-list').innerHTML=d.queue.map(p=>`
+                <tr>
+                    <td><div class="flex items-center gap-2"><img src="${p.pictureUrl}" class="w-6 h-6 rounded-full"><span class="font-bold text-xs">${p.nickname}</span></div></td>
+                    <td><span class="badge badge-ghost badge-xs">${p.rank_title}</span></td>
+                    <td class="text-xs text-gray-500">${Math.floor((Date.now()/1000-p.last_active)/60)}m</td>
+                </tr>`).join('');
+
+            // 3. Events
+            document.getElementById('events-container').innerHTML=d.events.map(e=>`
+                <div class="card bg-white shadow-sm border-l-4 border-yellow-400 p-4">
+                    <h3 class="font-bold text-lg">${e.name}</h3>
+                    <div class="text-sm text-gray-500 mb-2">📅 ${e.datetime.replace('T',' ')}</div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs badge badge-neutral">ลงชื่อแล้ว ${e.player_count} คน</span>
+                        <button onclick="joinEvt('${e.id}')" class="btn btn-sm btn-outline">Join / Cancel</button>
+                    </div>
+                </div>`).join('');
+
+            // 4. Leaderboard
+            document.getElementById('lb-list').innerHTML = d.leaderboard.map((p, i) => `
+                <tr class="${p.id === user.id ? 'bg-blue-50' : ''}">
+                    <td class="font-bold">${i+1}</td>
+                    <td>
+                        <div class="flex items-center gap-3">
+                            <div class="avatar"><div class="w-8 rounded-full"><img src="${p.pictureUrl}" /></div></div>
+                            <div>
+                                <div class="font-bold text-sm">${p.nickname}</div>
+                                <div class="text-[10px] text-gray-500 badge badge-ghost badge-xs">${p.rank_title}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="text-right font-mono font-bold text-blue-600">${p.mmr}</td>
+                </tr>
+            `).join('');
+
+            // 5. Billing History
+            renderBillingHistory(d.billing_history);
+            
+            // 6. Match History (Render based on current filter)
+            renderMatchHistory();
+        }
+
+        // --- PROFILE EDIT ---
+        function editProfileModal() { document.getElementById('modal_profile').showModal(); }
+        async function saveProfile() {
+            const nn = document.getElementById('my-nickname').value;
+            await fetch('/api/update_profile', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id, nickname:nn})});
+            alert('เปลี่ยนชื่อเล่นเรียบร้อย');
+            location.reload(); // Reload เพื่อ update ชื่อทันที
+        }
+
+        // --- HISTORY LOGIC ---
+        let histFilter = 'all';
+        function switchHist(type, btn) {
+            histFilter = type;
+            btn.parentElement.querySelectorAll('.tab').forEach(t=>t.classList.remove('tab-active'));
+            btn.classList.add('tab-active');
+            renderMatchHistory();
+        }
+
+        function renderMatchHistory() {
+            if(!globalData) return;
+            const container = document.getElementById('hist-list');
+            const data = globalData.match_history;
+            
+            const filtered = histFilter === 'my' 
+                ? data.filter(m => user.nickname && (m.team_a.includes(user.nickname) || m.team_b.includes(user.nickname)))
+                : data;
+
+            if(filtered.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-400 mt-4">ไม่มีประวัติการแข่ง</div>';
+                return;
+            }
+
+            container.innerHTML = filtered.map(m => `
+                <div class="card bg-white shadow-sm p-3 border border-gray-100">
+                    <div class="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>📅 ${m.date} ${m.time}</span>
+                        <span>Court ${m.court}</span>
+                    </div>
+                    <div class="flex items-center text-sm">
+                        <div class="w-5/12 text-right ${m.winner==='Team A'?'font-bold text-green-600':''}">${m.team_a.join(', ')}</div>
+                        <div class="w-2/12 text-center text-gray-300 text-xs">VS</div>
+                        <div class="w-5/12 text-left ${m.winner==='Team B'?'font-bold text-green-600':''}">${m.team_b.join(', ')}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderBillingHistory(hist) {
+            const c = document.getElementById('billing-history-container');
+            if(hist.length === 0) { c.innerHTML = '<div class="text-center text-xs text-gray-400">ยังไม่มีประวัติบิล</div>'; return; }
+            c.innerHTML = hist.map(b => `
+                <div class="collapse collapse-arrow bg-base-100 border border-base-300">
+                    <input type="radio" name="bill-hist" /> 
+                    <div class="collapse-title text-sm font-medium flex justify-between">
+                        <span>📅 ${b.date}</span>
+                        <span class="text-green-600">รวม ${b.total} บ.</span>
+                    </div>
+                    <div class="collapse-content text-xs"> 
+                        <table class="table table-xs w-full">
+                            ${b.players.map(p => `<tr><td>${p.name}</td><td class="text-right">${p.cost}</td></tr>`).join('')}
+                        </table>
+                    </div>
+                </div>
+            `).join('');
         }
 
         // --- ACTIONS ---
+        async function toggleStatus(){ await fetch('/api/toggle_status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})}); refresh(); }
         async function createEvent(){ await fetch('/api/admin/create_event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id,name:document.getElementById('evt-name').value,datetime:document.getElementById('evt-time').value})}); alert('สร้างแล้ว'); refresh();}
         async function joinEvt(eid){ const r=await fetch('/api/event/join',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id,eventId:eid})}); alert((await r.json()).status); refresh();}
         async function triggerMatchmake(){ const r=await(await fetch('/api/matchmake',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id})})).json(); if(r.status!='matched')alert(r.message); else refresh();}
         async function changeCourts(d){ await fetch('/api/admin/set_courts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id,count:document.querySelectorAll('#courts-container>div').length+d})}); refresh();}
         async function subRes(w){ await fetch('/api/submit_result',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selCid,winner:w,requesterId:user.id})}); document.getElementById('modal_finish').close(); refresh();}
 
-        // --- BILLING ---
+        // --- BILLING LOGIC ---
+        let currentBillData = null; // เก็บค่าที่คำนวณแล้วไว้รอ save
         async function prepBill(){
             const d=await(await fetch('/api/get_dashboard')).json();
             const all=[]; Object.values(d.courts).forEach(m=>{if(m)[...m.team_a,...m.team_b].forEach(p=>all.push(p))}); d.queue.forEach(p=>all.push(p));
-            const u=[...new Map(all.map(p=>[p.id,p])).values()].sort((a,b)=>a.name.localeCompare(b.name));
+            // เอา unique players
+            const u=[...new Map(all.map(p=>[p.id,p])).values()].sort((a,b)=>a.nickname.localeCompare(b.nickname));
+            
             const hr=document.getElementById('def-hr').value; const mn=document.getElementById('def-min').value;
-            document.getElementById('bill-inputs').innerHTML=u.map(p=>`<div class="flex justify-between items-center bg-gray-50 p-1 rounded"><span class="text-xs font-bold w-1/3 truncate">${p.name}</span><div class="flex gap-1"><input type="number" data-uid="${p.id}" data-type="hr" value="${hr}" class="input input-xs w-10 text-center"><input type="number" data-uid="${p.id}" data-type="min" value="${mn}" class="input input-xs w-10 text-center"></div></div>`).join('');
+            const container = document.getElementById('bill-inputs');
+            container.classList.remove('hidden');
+            container.innerHTML=u.map(p=>`
+                <div class="flex justify-between items-center bg-gray-50 p-2 rounded border">
+                    <span class="text-xs font-bold w-1/3 truncate">${p.nickname}</span>
+                    <div class="flex gap-1">
+                        <input type="number" data-uid="${p.id}" data-type="hr" value="${hr}" class="input input-xs w-10 text-center">
+                        <span class="text-xs self-center">:</span>
+                        <input type="number" data-uid="${p.id}" data-type="min" value="${mn}" class="input input-xs w-10 text-center">
+                    </div>
+                </div>`).join('');
         }
         async function calcBill(){
             const ps=[]; document.querySelectorAll('#bill-inputs>div').forEach(d=>{
                 const i=d.querySelectorAll('input'); ps.push({id:i[0].dataset.uid, name:d.querySelector('span').innerText, minutes:parseInt(i[0].value)*60+parseInt(i[1].value)})
             });
-            const r=await(await fetch('/api/admin/calculate_bill',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id,totalExpense:document.getElementById('bill-total').value,players:ps})})).json();
+            const total = document.getElementById('bill-total').value;
+            if(!total) return alert("ใส่ยอดรวมก่อน");
+
+            const r=await(await fetch('/api/admin/calculate_bill',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id,totalExpense:total,players:ps})})).json();
             if(r.error)return alert(r.error);
+            
             document.getElementById('bill-res').classList.remove('hidden');
-            document.getElementById('bill-body').innerHTML=r.bill_list.map(b=>`<tr><td>${b.name}</td><td class="text-right text-xs">${b.time}</td><td class="text-right font-bold text-green-700">${b.cost}</td></tr>`).join('');
+            document.getElementById('rate-display').innerText = r.rate;
+            document.getElementById('bill-body').innerHTML=r.bill_list.map(b=>`<tr><td>${b.name}</td><td class="text-right text-xs text-gray-500">${b.time}</td><td class="text-right font-bold text-green-700">${b.cost}</td></tr>`).join('');
+            
+            // เตรียมข้อมูลสำหรับ Save (เฉพาะ Staff)
+            currentBillData = r.bill_list; 
+            if(user.role !== 'user') document.getElementById('btn-save-bill').classList.remove('hidden');
+        }
+        
+        async function saveBillHistory() {
+            if(!confirm("ยืนยันบันทึกบิลนี้ลงประวัติ?")) return;
+            const total = document.getElementById('bill-total').value;
+            await fetch('/api/admin/save_bill', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({adminId:user.id, total:total, billData:currentBillData})
+            });
+            alert("บันทึกเรียบร้อย"); refresh();
         }
 
-        // --- SUPER / STAFF ---
+        // --- SUPER / STAFF HELPERS ---
         async function loadAllPlayers(){
             const ps=await(await fetch('/api/get_all_players')).json(); 
-            const h=ps.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+            const h=ps.map(p=>`<option value="${p.id}">${p.nickname} (${p.rank_title})</option>`).join('');
             document.getElementById('all-players-select').innerHTML=h;
             document.getElementById('rank-select').innerHTML=h;
         }
         async function toggleMod(){
             const tid=document.getElementById('all-players-select').value;
             const r=await(await fetch('/api/super/toggle_mod',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({adminId:user.id,targetId:tid})})).json();
-            if(r.error) alert(r.error); else { alert(r.status); refresh(); }
+            if(r.error) alert(r.error); else { alert(r.msg); refresh(); }
         }
         async function setRank(){
             const tid=document.getElementById('rank-select').value; const mmr=document.getElementById('new-rank').value;

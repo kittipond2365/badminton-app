@@ -1,44 +1,54 @@
 from flask import Flask, request, jsonify, render_template
 import time
 import uuid
+from datetime import datetime
 
 app = Flask(__name__)
 
 # --- CONFIG ---
-# ใส่ ID ของคุณปอนด์คนเดียวเท่านั้น (User ID ที่ขึ้นต้นด้วย U...)
-SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9" 
+# ใส่ ID ของคุณปอนด์ตรงนี้ (แก้บั๊ก Assign Mod ไม่ได้)
+SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9"
 
 # --- DATABASE ---
-# เก็บรายชื่อคนที่เป็น Mod (เก็บเป็น ID)
-mod_ids = set()
-
-players_db = {}
+mod_ids = set() # เก็บ ID ของคนที่เป็น Mod
+players_db = {} 
 events_db = {}
 active_courts = {1: None, 2: None}
 court_settings = {"total_courts": 2}
 
-# --- HELPER: เช็คสิทธิ์ ---
+# เก็บประวัติ
+match_history_db = []  # [{date, time, court, team_a:[], team_b:[], winner}]
+billing_history_db = [] # [{date, total, players:[{name, cost}]}]
+
+# --- HELPER FUNCTIONS ---
+
+def get_rank_title(mmr):
+    if mmr <= 500: return "noob dog"
+    elif mmr <= 1000: return "Noob"
+    elif mmr <= 1100: return "เด็กกระโปก"
+    elif mmr <= 1200: return "เก่งใช้ได้"
+    else: return "Pro Player"
+
 def get_role(uid):
     if uid == SUPER_ADMIN_ID: return 'super'
     if uid in mod_ids: return 'mod'
     return 'user'
 
 def is_staff(uid):
-    # เป็น Super หรือ Mod ก็ได้
     return uid == SUPER_ADMIN_ID or uid in mod_ids
 
 def get_active_players():
-    active_list = []
+    active = []
     curr = time.time()
-    TIMEOUT = 5 * 3600 
+    TIMEOUT = 5 * 3600
     for uid, p in players_db.items():
         if p['status'] == 'active':
             if (curr - p['last_active']) > TIMEOUT:
                 p['status'] = 'offline'
             else:
-                active_list.append(p)
-    active_list.sort(key=lambda x: x['last_active'])
-    return active_list
+                active.append(p)
+    active.sort(key=lambda x: x['last_active'])
+    return active
 
 def calculate_elo(ra, rb, sa):
     ea = 1 / (1 + 10 ** ((rb - ra) / 400))
@@ -62,16 +72,31 @@ def login():
     uid = d.get('userId')
     if uid not in players_db:
         players_db[uid] = {
-            "id": uid, "name": d.get('displayName'), "pictureUrl": d.get('pictureUrl'),
-            "mmr": 1000, "status": "offline", "last_active": 0, "total_seconds_played": 0
+            "id": uid, 
+            "name": d.get('displayName'), # ชื่อเริ่มต้นใช้จาก LINE
+            "nickname": d.get('displayName'), # ชื่อเล่น (แก้ไขได้)
+            "pictureUrl": d.get('pictureUrl'),
+            "mmr": 1000, 
+            "status": "offline", 
+            "last_active": 0, 
+            "total_seconds_played": 0
         }
-    players_db[uid]['name'] = d.get('displayName')
+    # อัปเดตข้อมูลพื้นฐาน (แต่ไม่ทับ Nickname ที่แก้ไว้)
     players_db[uid]['pictureUrl'] = d.get('pictureUrl')
     
-    # ส่ง Role กลับไปบอก Frontend
     resp = players_db[uid].copy()
-    resp['role'] = get_role(uid) 
+    resp['role'] = get_role(uid)
+    resp['rank_title'] = get_rank_title(resp['mmr'])
     return jsonify(resp)
+
+@app.route('/api/update_profile', methods=['POST'])
+def update_profile():
+    uid = request.json.get('userId')
+    new_name = request.json.get('nickname')
+    if uid in players_db:
+        players_db[uid]['nickname'] = new_name
+        return jsonify({"success": True})
+    return jsonify({"error": "User not found"}), 404
 
 @app.route('/api/toggle_status', methods=['POST'])
 def toggle_status():
@@ -92,10 +117,11 @@ def get_dashboard():
         courts[c] = active_courts[c]
         if courts[c]: courts[c]['elapsed'] = int(time.time() - active_courts[c]['start_time'])
     
-    # ส่งรายชื่อ Mod กลับไปด้วย เพื่อให้ Super Admin เห็นว่าใครเป็น Mod แล้วบ้าง
-    mod_list = []
-    for mid in mod_ids:
-        if mid in players_db: mod_list.append(players_db[mid])
+    # Leaderboard Logic
+    leaderboard = sorted(players_db.values(), key=lambda x: x['mmr'], reverse=True)
+    # เติม Rank Title ให้ทุกคนก่อนส่ง
+    for p in leaderboard:
+        p['rank_title'] = get_rank_title(p['mmr'])
 
     eq = []
     for eid, e in events_db.items():
@@ -108,50 +134,39 @@ def get_dashboard():
         "queue": get_active_players(),
         "queue_count": len(get_active_players()),
         "events": eq,
-        "mods": mod_list
+        "leaderboard": leaderboard,
+        "match_history": match_history_db, # ส่งประวัติทั้งหมด
+        "billing_history": billing_history_db
     })
 
-# --- SUPER ADMIN ONLY: แต่งตั้ง MOD ---
+# --- SUPER ADMIN: Toggle Mod ---
 @app.route('/api/super/toggle_mod', methods=['POST'])
 def toggle_mod():
-    # เช็คว่าคนเรียกคือ Super Admin ตัวจริงไหม
-    if request.json.get('adminId') != SUPER_ADMIN_ID: return jsonify({"error":"Forbidden"}), 403
+    # เช็คว่าเป็น Super Admin ตัวจริงไหม
+    if request.json.get('adminId') != SUPER_ADMIN_ID: 
+        return jsonify({"error":"Forbidden"}), 403
     
     target = request.json.get('targetId')
     if target in mod_ids:
-        mod_ids.remove(target) # ปลดตำแหน่ง
-        status = "removed"
+        mod_ids.remove(target)
+        msg = "ปลด Mod แล้ว"
     else:
-        mod_ids.add(target) # แต่งตั้ง
-        status = "added"
-    return jsonify({"success": True, "status": status})
+        mod_ids.add(target)
+        msg = "แต่งตั้ง Mod แล้ว"
+    return jsonify({"success": True, "msg": msg})
 
-# --- STAFF ACTIONS (SUPER + MOD) ---
-
-@app.route('/api/admin/set_courts', methods=['POST'])
-def set_courts():
-    if not is_staff(request.json.get('adminId')): return jsonify({"error"}), 403
-    count = int(request.json.get('count'))
-    court_settings['total_courts'] = count
-    curr = list(active_courts.keys())
-    if count > len(curr):
-        for i in range(len(curr)+1, count+1): active_courts[i]=None
-    elif count < len(curr):
-        for i in range(count+1, len(curr)+1): 
-            if i in active_courts: del active_courts[i]
-    return jsonify({"success":True})
+# --- STAFF ACTIONS ---
 
 @app.route('/api/admin/create_event', methods=['POST'])
 def create_event():
-    if not is_staff(request.json.get('adminId')): return jsonify({"error"}), 403
+    if not is_staff(request.json.get('adminId')): return jsonify({"error":"Forbidden"}), 403
     eid = str(uuid.uuid4())[:8]
     events_db[eid] = {"id":eid, "name":request.json.get('name'), "datetime":request.json.get('datetime'), "players":[], "status":"open"}
     return jsonify({"success":True})
 
 @app.route('/api/matchmake', methods=['POST'])
 def matchmake():
-    # Matchmake เปิดให้ Staff กด หรือจริงๆ จะให้ใครกดก็ได้แล้วแต่ Design แต่ในที่นี้ล็อกให้ Staff
-    # if not is_staff(request.json.get('adminId')): return jsonify({"error"}), 403 (ถ้าอยากล็อคให้แก้บรรทัดนี้)
+    if not is_staff(request.json.get('adminId')): return jsonify({"error":"Forbidden"}), 403
     
     free = None
     for c in sorted(active_courts.keys()):
@@ -185,17 +200,31 @@ def submit_result():
     match = active_courts.get(cid)
     if not match: return jsonify({"error"}), 400
     
-    # Security: ต้องเป็น Staff หรือ คนแข่งเท่านั้น
+    # Permission Check
     players_in_match = [p['id'] for p in match['team_a']+match['team_b']]
-    if not is_staff(req_id) and req_id not in players_in_match: return jsonify({"error":"No permission"}), 403
+    if not is_staff(req_id) and req_id not in players_in_match: 
+        return jsonify({"error":"No permission"}), 403
     
+    # 1. บันทึก History
+    match_record = {
+        "id": str(uuid.uuid4())[:8],
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "time": datetime.now().strftime("%H:%M"),
+        "court": cid,
+        "team_a": [p['nickname'] for p in match['team_a']],
+        "team_b": [p['nickname'] for p in match['team_b']],
+        "winner": "Team A" if winner == 'A' else "Team B"
+    }
+    match_history_db.insert(0, match_record) # ใส่หน้าสุด
+
+    # 2. Update Stats
     dur = time.time() - match['start_time']
     ta=match['team_a']; tb=match['team_b']
-    
     for p in ta+tb:
         if p['id'] in players_db:
             players_db[p['id']]['total_seconds_played'] += dur
             
+    # 3. MMR Calc
     ma=sum(p['mmr'] for p in ta)/2; mb=sum(p['mmr'] for p in tb)/2
     chg = calculate_elo(ma, mb, 1 if winner=='A' else 0)
     
@@ -211,11 +240,13 @@ def submit_result():
 
 @app.route('/api/admin/calculate_bill', methods=['POST'])
 def calculate_bill():
-    if not is_staff(request.json.get('adminId')): return jsonify({"error"}), 403
+    # อนุญาตให้ทุกคนกดคำนวณดูเล่นๆ ได้ แต่ถ้าจะ Save ต้องเป็น Staff
+    # แต่ในที่นี้เราแยก API Save ไว้ต่างหาก ดังนั้นอันนี้เปิด Public ได้
     total = float(request.json.get('totalExpense'))
     p_data = request.json.get('players')
     grand_min = sum(p['minutes'] for p in p_data)
-    if grand_min == 0: return jsonify({"error":"0 min"})
+    
+    if grand_min == 0: return jsonify({"error":"เวลารวมเป็น 0"})
     rate = total/grand_min
     
     bill = []
@@ -223,11 +254,52 @@ def calculate_bill():
         if p['minutes']>0:
             hr = p['minutes']//60; mn = p['minutes']%60
             bill.append({"name":p['name'], "time":f"{hr}ชม {mn}น", "cost":int(round(p['minutes']*rate))})
+            
     return jsonify({"bill_list":sorted(bill, key=lambda x:x['name']), "rate":round(rate*60, 2)})
+
+@app.route('/api/admin/save_bill', methods=['POST'])
+def save_bill():
+    # อันนี้ต้อง Staff เท่านั้นถึงจะบันทึกประวัติการเงินได้
+    if not is_staff(request.json.get('adminId')): return jsonify({"error":"Forbidden"}), 403
+    
+    bill_data = request.json.get('billData') # รับก้อนที่คำนวณเสร็จแล้ว
+    record = {
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "total": request.json.get('total'),
+        "players": bill_data
+    }
+    billing_history_db.insert(0, record)
+    return jsonify({"success": True})
 
 @app.route('/api/admin/set_rank', methods=['POST'])
 def set_rank():
+    if not is_staff(request.json.get('adminId')): return jsonify({"error":"Forbidden"}), 403
+    players_db[request.json.get('targetId')]['mmr'] = int(request.json.get('mmr'))
+    return jsonify({"success":True})
+
+@app.route('/api/event/join', methods=['POST'])
+def join_evt():
+    uid=request.json.get('userId'); eid=request.json.get('eventId')
+    if eid in events_db and uid in players_db:
+        if uid not in events_db[eid]['players']: events_db[eid]['players'].append(uid); return jsonify({"status":"joined"})
+        else: events_db[eid]['players'].remove(uid); return jsonify({"status":"left"})
+    return jsonify({"error"}), 400
+
+@app.route('/api/get_all_players')
+def get_all(): return jsonify(list(players_db.values()))
+
+@app.route('/api/admin/set_courts', methods=['POST'])
+def set_courts():
     if not is_staff(request.json.get('adminId')): return jsonify({"error"}), 403
-    players_db[request.json.get]
+    count = int(request.json.get('count'))
+    court_settings['total_courts'] = count
+    curr = list(active_courts.keys())
+    if count > len(curr):
+        for i in range(len(curr)+1, count+1): active_courts[i]=None
+    elif count < len(curr):
+        for i in range(count+1, len(curr)+1): 
+            if i in active_courts: del active_courts[i]
+    return jsonify({"success":True})
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
