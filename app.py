@@ -8,21 +8,29 @@ from flask import Flask, request, jsonify, render_template
 app = Flask(__name__)
 
 # --- CONFIG ---
-SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9" # ⚠️ อย่าลืมแก้ ID นี้นะครับ
-DATA_FILE = "/var/data/izesquad_data.json" # สำหรับ Render Disk
+# ⚠️ ID ของ Super Admin (คุณ)
+SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9"
 
-# --- DATABASE ---
+# ✅ Path สำหรับ Render Disk (ห้ามแก้ถ้าใช้ Disk)
+DATA_FILE = "/var/data/izesquad_data.json"
+
+# --- DATABASE SETUP ---
 default_db = {
+    "system_settings": {
+        "total_courts": 2,
+        "is_session_active": False,
+        "current_event_id": None
+    },
     "mod_ids": [],
     "players": {},
     "events": {},
     "match_history": [],
-    "billing_history": [] # 👈 เพิ่มตารางเก็บประวัติการคิดเงิน
+    "billing_history": []
 }
-active_courts = {1: None, 2: None} 
+active_courts = {} 
 
 def load_data():
-    global db
+    global db, active_courts
     if not os.path.exists(DATA_FILE):
         os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         db = default_db.copy()
@@ -31,17 +39,32 @@ def load_data():
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 db = json.load(f)
+                # Migration: เติม key ที่ขาด
                 for k in default_db:
                     if k not in db: db[k] = default_db[k]
+                if "system_settings" not in db: db["system_settings"] = default_db["system_settings"]
         except: 
             db = default_db.copy()
             save_data()
+    
+    refresh_courts()
 
 def save_data():
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(db, f, ensure_ascii=False, indent=4)
     except: pass
+
+def refresh_courts():
+    # ปรับจำนวนคอร์ทตาม database
+    target = db['system_settings'].get('total_courts', 2)
+    # เพิ่ม
+    for i in range(1, target + 1):
+        if i not in active_courts: active_courts[i] = None
+    # ลด
+    current_keys = list(active_courts.keys())
+    for k in current_keys:
+        if k > target: del active_courts[k]
 
 load_data()
 
@@ -70,8 +93,7 @@ def calculate_smart_stats(uid):
         is_winner = (m['winner_team'] == my_team)
         
         if is_winner:
-            wins += 1
-            current_streak += 1
+            wins += 1; current_streak += 1
         else:
             current_streak = 0
         if current_streak > max_streak: max_streak = current_streak
@@ -91,33 +113,21 @@ def calculate_smart_stats(uid):
             opponents[pid]['played'] += 1
             if not is_winner: opponents[pid]['lost'] += 1
 
-    best_partner = "-"
-    best_wr = -1
-    for pid, data in partners.items():
-        if data['played'] >= 2:
-            wr = (data['won'] / data['played']) * 100
-            if wr > best_wr:
-                best_wr = wr
-                best_partner = f"{data['name']} ({int(wr)}%)"
+    best_partner, best_wr = "-", -1
+    for pid, d in partners.items():
+        if d['played'] >= 2:
+            wr = (d['won']/d['played'])*100
+            if wr > best_wr: best_wr=wr; best_partner=f"{d['name']} ({int(wr)}%)"
 
-    nemesis = "-"
-    worst_wr = -1
-    for pid, data in opponents.items():
-        if data['played'] >= 2:
-            loss_rate = (data['lost'] / data['played']) * 100
-            if loss_rate > worst_wr:
-                worst_wr = loss_rate
-                nemesis = f"{data['name']} (แพ้ {int(loss_rate)}%)"
+    nemesis, worst_wr = "-", -1
+    for pid, d in opponents.items():
+        if d['played'] >= 2:
+            lr = (d['lost']/d['played'])*100
+            if lr > worst_wr: worst_wr=lr; nemesis=f"{d['name']} (แพ้ {int(lr)}%)"
 
-    return {
-        "win_rate": int((wins / total) * 100),
-        "total": total,
-        "streak": max_streak,
-        "best_partner": best_partner,
-        "nemesis": nemesis
-    }
+    return {"win_rate": int((wins/total)*100), "total": total, "streak": max_streak, "best_partner": best_partner, "nemesis": nemesis}
 
-# --- ROUTES ---
+# --- API ROUTES ---
 
 @app.route('/')
 def index(): return render_template('index.html')
@@ -142,35 +152,42 @@ def login():
 
 @app.route('/api/get_dashboard')
 def get_dashboard():
+    # Courts
     c_data = {}
     for cid, m in active_courts.items():
         if m: m['elapsed'] = int(time.time() - m['start_time'])
         c_data[cid] = m
 
+    # Queue
     active = [p for p in db['players'].values() if p['status'] in ['active','playing']]
     active.sort(key=lambda x: x.get('last_active', 0))
 
+    # Leaderboard
     lb = sorted(db['players'].values(), key=lambda x: x['mmr'], reverse=True)
     for p in lb: p['rank_title'] = get_rank_title(p['mmr'])
     
+    # Events
     event_list = []
     for eid, e in db['events'].items():
         joined_users = []
         for pid in e.get('players', []):
             if pid in db['players']:
-                joined_users.append({"id": pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid]['pictureUrl']})
+                joined_users.append({"id":pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid]['pictureUrl']})
         e['joined_users'] = joined_users
         event_list.append(e)
     event_list.sort(key=lambda x: x['datetime'])
 
     return jsonify({
+        "system": db['system_settings'],
         "courts": c_data,
         "queue": active,
         "queue_count": len(active),
         "events": event_list,
         "leaderboard": lb,
         "match_history": db['match_history'][:20],
-        "billing_history": db.get('billing_history', [])[:5]
+        "billing_history": db.get('billing_history', [])[:5],
+        # ส่งรายชื่อทั้งหมดไปให้ Super Admin ใช้แต่งตั้ง Mod
+        "all_players": [{"id": p['id'], "nickname": p['nickname'], "is_mod": p['id'] in db['mod_ids']} for p in db['players'].values()]
     })
 
 @app.route('/api/toggle_status', methods=['POST'])
@@ -185,65 +202,104 @@ def toggle_status():
         save_data()
     return jsonify({"success":True})
 
-# --- EVENT & BILLING ---
-@app.route('/api/event/create', methods=['POST'])
-def create_event():
-    d=request.json
-    eid = str(uuid.uuid4())[:8]
-    db['events'][eid] = {"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}
+# --- ADMIN / MOD SYSTEM ---
+
+@app.route('/api/admin/toggle_session', methods=['POST'])
+def toggle_session():
+    d = request.json
+    uid = d.get('userId')
+    action = d.get('action')
+    
+    # ✅ Check สิทธิ์: ต้องเป็น Super Admin หรือ Mod
+    is_super = uid == SUPER_ADMIN_ID
+    is_mod = uid in db['mod_ids']
+    
+    if not (is_super or is_mod):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    if action == 'start':
+        db['system_settings']['is_session_active'] = True
+        # สร้าง Event อัตโนมัติ ถ้ายังไม่มี
+        if not db['system_settings'].get('current_event_id'):
+            eid = str(uuid.uuid4())[:8]
+            today = datetime.now().strftime("%d/%m/%Y")
+            db['events'][eid] = {"id":eid, "name": f"ก๊วน {today}", "datetime": datetime.now().isoformat(), "players":[], "status":"active"}
+            db['system_settings']['current_event_id'] = eid
+    else:
+        db['system_settings']['is_session_active'] = False
+        db['system_settings']['current_event_id'] = None
+        # Reset Status
+        for p in db['players'].values():
+            if p['status'] != 'offline': p['status'] = 'offline'
+            
     save_data()
     return jsonify({"success":True})
 
-@app.route('/api/event/delete', methods=['POST'])
-def delete_event():
-    eid = request.json.get('eventId')
-    if eid in db['events']:
-        del db['events'][eid]
-        save_data()
-        return jsonify({"success":True})
-    return jsonify({"error":"Not found"})
+@app.route('/api/admin/update_courts', methods=['POST'])
+def update_courts():
+    # Mod เพิ่มลดสนามได้
+    count = int(request.json.get('count', 2))
+    if count < 1: count = 1
+    db['system_settings']['total_courts'] = count
+    save_data()
+    refresh_courts()
+    return jsonify({"success":True})
 
-@app.route('/api/event/join_toggle', methods=['POST'])
-def join_event_toggle():
+@app.route('/api/admin/manage_mod', methods=['POST'])
+def manage_mod():
+    # เฉพาะ Super Admin เท่านั้น
     d = request.json
-    eid, uid = d['eventId'], d['userId']
-    if eid in db['events']:
-        if uid in db['events'][eid]['players']:
-            db['events'][eid]['players'].remove(uid)
-            action = "removed"
-        else:
-            db['events'][eid]['players'].append(uid)
-            action = "added"
-        save_data()
-        return jsonify({"success":True, "action":action})
-    return jsonify({"error":"Not found"})
+    requester = d.get('requesterId') # คนกด
+    target_id = d.get('targetUserId')
+    action = d.get('action')
+    
+    if requester != SUPER_ADMIN_ID:
+        return jsonify({"error": "Super Admin Only"}), 403
 
-@app.route('/api/billing/save', methods=['POST'])
-def save_billing():
-    # บันทึกประวัติการคิดเงิน (เผื่อดูย้อนหลัง)
-    d = request.json
-    bill_record = {
-        "id": str(uuid.uuid4())[:8],
+    if action == 'promote':
+        if target_id not in db['mod_ids']: db['mod_ids'].append(target_id)
+    else:
+        if target_id in db['mod_ids']: db['mod_ids'].remove(target_id)
+    save_data()
+    return jsonify({"success":True})
+
+# --- GAME & EVENT ---
+
+@app.route('/api/submit_result', methods=['POST'])
+def submit_result():
+    d=request.json; cid=int(d['courtId']); winner=d['winner']; req_uid=d['userId']
+    m = active_courts.get(cid)
+    if not m: return jsonify({"error":"No match"})
+    
+    # Permission Check: Super Admin / Mod / Player in that game
+    is_staff = (req_uid == SUPER_ADMIN_ID) or (req_uid in db['mod_ids'])
+    is_player = (req_uid in m['team_a_ids']) or (req_uid in m['team_b_ids'])
+    
+    if not (is_staff or is_player):
+        return jsonify({"error": "ไม่มีสิทธิ์จบเกมนี้"}), 403
+    
+    # Save History
+    hist = {
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "event_name": d['eventName'],
-        "total_cost": d['totalCost'],
-        "details": d['details'] # list of {name, cost}
+        "team_a": m['team_a'], "team_a_ids": m['team_a_ids'],
+        "team_b": m['team_b'], "team_b_ids": m['team_b_ids'],
+        "winner_team": winner
     }
-    if 'billing_history' not in db: db['billing_history'] = []
-    db['billing_history'].insert(0, bill_record)
+    db['match_history'].insert(0, hist)
+    
+    # MMR Calc
+    win_ids = m['team_a_ids'] if winner=='A' else m['team_b_ids']
+    lose_ids = m['team_b_ids'] if winner=='A' else m['team_a_ids']
+    for uid in win_ids: 
+        db['players'][uid]['mmr'] += 25
+        db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
+    for uid in lose_ids: 
+        db['players'][uid]['mmr'] -= 20
+        db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
+        
+    active_courts[cid] = None
     save_data()
     return jsonify({"success":True})
-
-# --- GAMEPLAY ---
-@app.route('/api/admin/set_mmr', methods=['POST'])
-def set_mmr():
-    d = request.json
-    uid, new_mmr = d['targetUserId'], int(d['newMmr'])
-    if uid in db['players']:
-        db['players'][uid]['mmr'] = new_mmr
-        save_data()
-        return jsonify({"success":True})
-    return jsonify({"error":"User not found"})
 
 @app.route('/api/matchmake', methods=['POST'])
 def matchmake():
@@ -267,32 +323,34 @@ def matchmake():
     save_data()
     return jsonify({"status":"matched"})
 
-@app.route('/api/submit_result', methods=['POST'])
-def submit_result():
-    d=request.json; cid=int(d['courtId']); winner=d['winner']
-    m = active_courts[cid]
-    if not m: return jsonify({"error":"No match"})
-    
-    hist = {
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "team_a": m['team_a'], "team_a_ids": m['team_a_ids'],
-        "team_b": m['team_b'], "team_b_ids": m['team_b_ids'],
-        "winner_team": winner
-    }
-    db['match_history'].insert(0, hist)
-    
-    win_ids = m['team_a_ids'] if winner=='A' else m['team_b_ids']
-    lose_ids = m['team_b_ids'] if winner=='A' else m['team_a_ids']
-    for uid in win_ids: 
-        db['players'][uid]['mmr'] += 25
-        db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
-    for uid in lose_ids: 
-        db['players'][uid]['mmr'] -= 20
-        db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
-        
-    active_courts[cid] = None
+@app.route('/api/event/create', methods=['POST'])
+def create_event():
+    d=request.json; eid=str(uuid.uuid4())[:8]
+    db['events'][eid] = {"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}
     save_data()
     return jsonify({"success":True})
+
+@app.route('/api/event/delete', methods=['POST'])
+def delete_event():
+    eid=request.json.get('eventId')
+    if eid in db['events']: del db['events'][eid]; save_data()
+    return jsonify({"success":True})
+
+@app.route('/api/event/join_toggle', methods=['POST'])
+def join_event_toggle():
+    d=request.json; eid=d['eventId']; uid=d['userId']
+    if eid in db['events']:
+        if uid in db['events'][eid]['players']: db['events'][eid]['players'].remove(uid)
+        else: db['events'][eid]['players'].append(uid)
+        save_data()
+        return jsonify({"success":True})
+    return jsonify({"error":"Not found"})
+
+@app.route('/api/admin/set_mmr', methods=['POST'])
+def set_mmr():
+    d=request.json; uid=d['targetUserId']; new_mmr=int(d['newMmr'])
+    if uid in db['players']: db['players'][uid]['mmr']=new_mmr; save_data(); return jsonify({"success":True})
+    return jsonify({"error":"User not found"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
