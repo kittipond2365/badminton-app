@@ -142,25 +142,18 @@ def get_dashboard():
                 joined_users.append({"id":pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid]['pictureUrl']})
         e['joined_users'] = joined_users
         
-        # ✅ FIX: แปลงเวลาให้เป็นตัวเลขเสมอ เพื่อให้ sort ไม่พัง
+        # FIX SORT KEY
         raw_dt = e.get('datetime', 0)
         if isinstance(raw_dt, str):
-            try:
-                # พยายามแปลง String กลับเป็น Timestamp (ถ้าทำได้)
-                # รองรับ Format: 2024-02-06T18:00:00 หรือ 2024-02-06T18:00:00.123456
-                dt_obj = datetime.fromisoformat(raw_dt)
-                e['sort_key'] = dt_obj.timestamp()
-            except:
-                e['sort_key'] = 0 # ถ้าแปลงไม่ได้ให้เป็น 0
-        else:
-            e['sort_key'] = raw_dt # ถ้าเป็นตัวเลขอยู่แล้วก็ใช้ได้เลย
-            
+            try: e['sort_key'] = datetime.fromisoformat(raw_dt).timestamp()
+            except: e['sort_key'] = 0
+        else: e['sort_key'] = raw_dt
         event_list.append(e)
-        
-    # Sort โดยใช้ key พิเศษที่เราสร้างขึ้น
+    
     event_list.sort(key=lambda x: x['sort_key'])
 
-    all_players_data = [{"id": p['id'], "nickname": p['nickname'], "pictureUrl": p.get('pictureUrl', ''), "status": p.get('status', 'offline'), "last_active": p.get('last_active', 0), "is_mod": p['id'] in db['mod_ids']} for p in db['players'].values()]
+    # ส่ง Last Active เป็นตัวเลขเสมอ
+    all_players_data = [{"id": p['id'], "nickname": p['nickname'], "pictureUrl": p.get('pictureUrl', ''), "status": p.get('status', 'offline'), "last_active": float(p.get('last_active', 0)), "is_mod": p['id'] in db['mod_ids']} for p in db['players'].values()]
 
     return jsonify({
         "system": db['system_settings'],
@@ -191,7 +184,6 @@ def toggle_session():
         db['system_settings']['is_session_active'] = True
         if not db['system_settings'].get('current_event_id'):
             eid = str(uuid.uuid4())[:8]; today = datetime.now().strftime("%d/%m/%Y")
-            # ใช้ time.time() เป็น Timestamp
             db['events'][eid] = {"id":eid, "name": f"ก๊วน {today}", "datetime": time.time(), "players":[], "status":"active"}
             db['system_settings']['current_event_id'] = eid
     else:
@@ -265,7 +257,6 @@ def matchmake():
 @app.route('/api/event/create', methods=['POST'])
 def create_event(): 
     d=request.json; eid=str(uuid.uuid4())[:8]
-    # บันทึก timestamp ที่ส่งมาจาก frontend
     db['events'][eid]={"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}
     save_data()
     return jsonify({"success":True})
