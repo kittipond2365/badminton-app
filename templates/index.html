@@ -53,16 +53,29 @@
                     <span id="my-rank-text" class="text-xs font-bold text-gray-400">...</span>
                 </div>
                 <button id="btn-checkin" onclick="toggleStatus()" class="btn btn-indigo w-full">Loading...</button>
-                <div id="partner-req-box" class="mt-2 hidden">
-                    <div class="divider text-xs text-gray-400 my-1">หรือ</div>
-                    <div class="join w-full">
-                        <select id="partner-select" class="select select-bordered select-sm w-full join-item text-xs"><option disabled selected>-- เลือกคู่หู --</option></select>
-                        <button onclick="requestPartner()" class="btn btn-sm btn-primary join-item">ขอ</button>
+                
+                <div id="partner-req-box" class="mt-3 hidden">
+                    <div class="divider text-xs text-gray-400 my-1">ขอจับคู่</div>
+                    
+                    <div id="req-form" class="join w-full">
+                        <select id="partner-select" class="select select-bordered select-sm w-full join-item text-xs">
+                            <option disabled selected>-- เลือกเพื่อนที่ Check-in แล้ว --</option>
+                        </select>
+                        <button onclick="requestPartner()" class="btn btn-sm btn-primary join-item">ส่งคำขอ</button>
+                    </div>
+
+                    <div id="req-active" class="hidden flex justify-between items-center bg-indigo-50 p-2 rounded border border-indigo-100">
+                        <div class="text-xs text-indigo-700">
+                            <i class="fa-solid fa-link"></i> รอจับคู่กับ: <span id="req-target-name" class="font-bold">...</span>
+                        </div>
+                        <button onclick="cancelRequest()" class="btn btn-xs btn-ghost text-red-500">ยกเลิก</button>
                     </div>
                 </div>
             </div>
         </div>
+
         <div id="courts-container" class="space-y-3 mb-6"></div>
+
         <div id="mod-court-control" class="hidden flex justify-between items-center bg-gray-200 p-2 rounded mb-4">
              <div class="join">
                 <button onclick="changeCourtCount(-1)" class="btn btn-xs join-item">-</button>
@@ -82,215 +95,78 @@
         </div>
     </div>
 
-    <div id="tab-stats" class="p-4 max-w-md mx-auto hidden">
-        <div class="card bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-xl mb-4">
-            <div class="card-body p-5 text-center">
-                <h2 class="text-lg font-bold opacity-80">WIN RATE</h2>
-                <div class="text-5xl font-black my-2" id="st-wr">0%</div>
-                <div class="flex justify-center gap-4 text-sm opacity-90"><span>🏆 Matches: <b id="st-total">0</b></span></div>
-            </div>
-        </div>
-        <div class="grid grid-cols-2 gap-3 mb-4">
-            <div class="bg-white p-3 rounded-xl shadow-sm border border-orange-100"><div class="text-xs text-gray-400 mb-1">🔥 Win Streak</div><div class="text-xl font-bold text-gray-700" id="st-streak">0</div></div>
-            <div class="bg-white p-3 rounded-xl shadow-sm border border-green-100"><div class="text-xs text-gray-400 mb-1">🤝 Best Partner</div><div class="text-sm font-bold text-green-600 truncate" id="st-partner">-</div></div>
-        </div>
-        <div class="bg-white rounded-xl shadow-sm p-3 border-l-4 border-red-400"><div class="text-xs text-gray-400 mb-1">😈 Nemesis</div><div class="text-lg font-bold text-red-600" id="st-nemesis">-</div></div>
-    </div>
+    <div id="tab-stats" class="p-4 max-w-md mx-auto hidden"><div class="card bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-xl mb-4"><div class="card-body p-5 text-center"><h2 class="text-lg font-bold opacity-80">WIN RATE</h2><div class="text-5xl font-black my-2" id="st-wr">0%</div><div class="flex justify-center gap-4 text-sm opacity-90"><span>🏆 Matches: <b id="st-total">0</b></span></div></div></div><div class="grid grid-cols-2 gap-3 mb-4"><div class="bg-white p-3 rounded-xl shadow-sm border border-orange-100"><div class="text-xs text-gray-400 mb-1">🔥 Win Streak</div><div class="text-xl font-bold text-gray-700" id="st-streak">0</div></div><div class="bg-white p-3 rounded-xl shadow-sm border border-green-100"><div class="text-xs text-gray-400 mb-1">🤝 Best Partner</div><div class="text-sm font-bold text-green-600 truncate" id="st-partner">-</div></div></div><div class="bg-white rounded-xl shadow-sm p-3 border-l-4 border-red-400"><div class="text-xs text-gray-400 mb-1">😈 Nemesis</div><div class="text-lg font-bold text-red-600" id="st-nemesis">-</div></div></div>
+    <div id="tab-history" class="p-4 max-w-md mx-auto hidden"><h3 class="font-bold text-gray-500 mb-2">ประวัติการแข่ง</h3><div class="bg-white rounded-xl shadow-sm overflow-hidden"><table class="table table-xs"><thead><tr class="bg-gray-100"><th>ผล</th><th>รายละเอียด</th><th class="text-right">MMR</th></tr></thead><tbody id="history-list"></tbody></table></div></div>
+    <div id="tab-rank" class="p-4 max-w-md mx-auto hidden"><div class="overflow-x-auto bg-white rounded-xl shadow-sm"><table class="table table-xs"><thead><tr class="bg-gray-100"><th>#</th><th>Player</th><th class="text-right">MMR</th></tr></thead><tbody id="lb-list"></tbody></table></div></div>
+    <div id="tab-events" class="p-4 max-w-md mx-auto hidden"><div class="staff-only hidden mb-4 p-4 bg-white rounded shadow"><h3 class="font-bold text-sm mb-2">➕ สร้าง Event</h3><input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน"><input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2"><button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button></div><div id="events-list" class="space-y-4"></div></div>
 
-    <div id="tab-history" class="p-4 max-w-md mx-auto hidden">
-        <h3 class="font-bold text-gray-500 mb-2">ประวัติการแข่ง</h3>
-        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
-            <table class="table table-xs">
-                <thead><tr class="bg-gray-100"><th>ผล</th><th>รายละเอียด</th><th class="text-right">MMR</th></tr></thead>
-                <tbody id="history-list"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div id="tab-rank" class="p-4 max-w-md mx-auto hidden">
-        <div class="overflow-x-auto bg-white rounded-xl shadow-sm">
-            <table class="table table-xs"><thead><tr class="bg-gray-100"><th>#</th><th>Player</th><th class="text-right">MMR</th></tr></thead><tbody id="lb-list"></tbody></table>
-        </div>
-    </div>
-
-    <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
-        <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow">
-            <h3 class="font-bold text-sm mb-2">➕ สร้าง Event</h3>
-            <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน">
-            <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
-            <button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button>
-        </div>
-        <div id="events-list" class="space-y-4"></div>
-    </div>
-
-    <dialog id="modal_manual_match" class="modal">
-        <div class="modal-box">
-            <h3 class="font-bold text-lg mb-4">🖐 จัดตัวเอง</h3>
-            <select id="man-court" class="select select-bordered select-sm w-full mb-2"><option value="1">Court 1</option><option value="2">Court 2</option></select>
-            <div class="grid grid-cols-2 gap-2 mb-4">
-                <div class="bg-red-50 p-2 rounded"><div class="font-bold text-red-500 text-xs">TEAM A</div><select id="man-p1" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p2" class="select select-bordered select-xs w-full player-select"></select></div>
-                <div class="bg-blue-50 p-2 rounded"><div class="font-bold text-blue-500 text-xs">TEAM B</div><select id="man-p3" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p4" class="select select-bordered select-xs w-full player-select"></select></div>
-            </div>
-            <button onclick="submitManualMatch()" class="btn btn-primary w-full">เริ่มแข่ง</button>
-            <form method="dialog" class="mt-2 text-center"><button class="btn btn-ghost btn-sm">ปิด</button></form>
-        </div>
-    </dialog>
-
-    <dialog id="modal_admin" class="modal">
-        <div class="modal-box">
-            <h3 class="font-bold text-lg mb-4 text-red-600">Admin Panel</h3>
-            <div class="mb-6 p-4 bg-red-50 rounded-lg border border-red-100">
-                <h4 class="font-bold text-sm mb-2">Session Control</h4>
-                <button id="btn-sess-start" onclick="toggleSession('start')" class="btn btn-success text-white w-full mb-2">🚀 เริ่มก๊วน</button>
-                <button id="btn-sess-end" onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน</button>
-            </div>
-            <div id="super-admin-section" class="mb-4 hidden">
-                <h4 class="font-bold text-sm mb-2">Moderators</h4>
-                <div class="h-48 overflow-y-auto border rounded p-2 bg-white"><table class="table table-xs"><tbody id="admin-user-list"></tbody></table></div>
-                <div class="mt-4 pt-4 border-t">
-                    <button onclick="resetSystem()" class="btn btn-outline btn-error btn-sm w-full">⚠️ Factory Reset</button>
-                </div>
-            </div>
-            <div class="modal-action"><form method="dialog"><button class="btn">ปิด</button></form></div>
-        </div>
-    </dialog>
-
-    <dialog id="modal_billing" class="modal">
-        <div class="modal-box w-11/12 max-w-2xl">
-            <h3 class="font-bold text-lg mb-2 text-green-600">💰 Billing</h3>
-            <div class="grid grid-cols-1 gap-3 mb-4 bg-gray-50 p-3 rounded-lg border">
-                <select id="bill-event-select" class="select select-bordered select-sm w-full" onchange="loadBillPlayers()"><option disabled selected>-- เลือก Session --</option></select>
-                <div class="grid grid-cols-2 gap-2">
-                    <input id="bill-total-cost" type="number" class="input input-bordered input-sm w-full" placeholder="ค่าใช้จ่ายรวม" oninput="calculateBill()">
-                    <input id="bill-default-hr" type="number" class="input input-bordered input-sm w-full" value="2" oninput="applyDefaultTime()">
-                </div>
-                <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="bill-show-all" class="checkbox checkbox-sm checkbox-primary" onchange="loadBillPlayers()"><span class="label-text font-bold text-gray-500">แสดงทุกคน</span></label>
-            </div>
-            <div class="overflow-x-auto max-h-64 mb-4 border rounded"><table class="table table-xs table-pin-rows"><thead><tr class="bg-gray-200"><th>ชื่อ</th><th class="w-16">ชม.</th><th class="w-16">นาที</th><th class="text-right">บาท</th></tr></thead><tbody id="bill-player-list"></tbody></table></div>
-            <div class="flex justify-between items-center bg-green-100 p-3 rounded mb-4"><span class="font-bold text-green-800">รวม:</span><span id="bill-grand-total" class="font-black text-xl text-green-800">0</span></div>
-            <div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ปิด</button></form><button class="btn btn-success text-white" onclick="copyBillSummary()">Copy</button></div>
-        </div>
-    </dialog>
-
-    <dialog id="modal_finish" class="modal">
-        <div class="modal-box text-center">
-            <h3 class="font-bold text-lg">จบเกม Court <span id="fin-cid"></span></h3>
-            <div class="flex gap-2 justify-center mt-4">
-                <button onclick="submitRes('A')" class="btn btn-primary flex-1">Team A ชนะ</button>
-                <button onclick="submitRes('B')" class="btn btn-error text-white flex-1">Team B ชนะ</button>
-            </div>
-        </div>
-        <form method="dialog" class="modal-backdrop"><button>close</button></form>
-    </dialog>
-
-    <dialog id="modal_edit_mmr" class="modal">
-        <div class="modal-box">
-            <h3 class="font-bold">แก้ไข MMR</h3>
-            <p id="edit-target-name" class="text-sm text-gray-500 mb-2"></p>
-            <input type="number" id="edit-new-mmr" class="input input-bordered w-full" placeholder="คะแนนใหม่">
-            <div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ยกเลิก</button></form><button class="btn btn-primary" onclick="saveMMR()">บันทึก</button></div>
-        </div>
-    </dialog>
+    <dialog id="modal_manual_match" class="modal"><div class="modal-box"><h3 class="font-bold text-lg mb-4">🖐 จัดตัวเอง</h3><select id="man-court" class="select select-bordered select-sm w-full mb-2"><option value="1">Court 1</option><option value="2">Court 2</option></select><div class="grid grid-cols-2 gap-2 mb-4"><div class="bg-red-50 p-2 rounded"><div class="font-bold text-red-500 text-xs">TEAM A</div><select id="man-p1" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p2" class="select select-bordered select-xs w-full player-select"></select></div><div class="bg-blue-50 p-2 rounded"><div class="font-bold text-blue-500 text-xs">TEAM B</div><select id="man-p3" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p4" class="select select-bordered select-xs w-full player-select"></select></div></div><button onclick="submitManualMatch()" class="btn btn-primary w-full">เริ่มแข่ง</button><form method="dialog" class="mt-2 text-center"><button class="btn btn-ghost btn-sm">ปิด</button></form></div></dialog>
+    <dialog id="modal_admin" class="modal"><div class="modal-box"><h3 class="font-bold text-lg mb-4 text-red-600">Admin Panel</h3><div class="mb-6 p-4 bg-red-50 rounded-lg border border-red-100"><h4 class="font-bold text-sm mb-2">Session Control</h4><button id="btn-sess-start" onclick="toggleSession('start')" class="btn btn-success text-white w-full mb-2">🚀 เริ่มก๊วน</button><button id="btn-sess-end" onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน</button></div><div id="super-admin-section" class="mb-4 hidden"><h4 class="font-bold text-sm mb-2">Moderators</h4><div class="h-48 overflow-y-auto border rounded p-2 bg-white"><table class="table table-xs"><tbody id="admin-user-list"></tbody></table></div><div class="mt-4 pt-4 border-t"><button onclick="resetSystem()" class="btn btn-outline btn-error btn-sm w-full">⚠️ Factory Reset</button></div></div><div class="modal-action"><form method="dialog"><button class="btn">ปิด</button></form></div></div></dialog>
+    <dialog id="modal_billing" class="modal"><div class="modal-box w-11/12 max-w-2xl"><h3 class="font-bold text-lg mb-2 text-green-600">💰 Billing</h3><div class="grid grid-cols-1 gap-3 mb-4 bg-gray-50 p-3 rounded-lg border"><select id="bill-event-select" class="select select-bordered select-sm w-full" onchange="loadBillPlayers()"><option disabled selected>-- เลือก Session --</option></select><div class="grid grid-cols-2 gap-2"><input id="bill-total-cost" type="number" class="input input-bordered input-sm w-full" placeholder="ค่าใช้จ่ายรวม" oninput="calculateBill()"><input id="bill-default-hr" type="number" class="input input-bordered input-sm w-full" value="2" oninput="applyDefaultTime()"></div><label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="bill-show-all" class="checkbox checkbox-sm checkbox-primary" onchange="loadBillPlayers()"><span class="label-text font-bold text-gray-500">แสดงทุกคน</span></label></div><div class="overflow-x-auto max-h-64 mb-4 border rounded"><table class="table table-xs table-pin-rows"><thead><tr class="bg-gray-200"><th>ชื่อ</th><th class="w-16">ชม.</th><th class="w-16">นาที</th><th class="text-right">บาท</th></tr></thead><tbody id="bill-player-list"></tbody></table></div><div class="flex justify-between items-center bg-green-100 p-3 rounded mb-4"><span class="font-bold text-green-800">รวม:</span><span id="bill-grand-total" class="font-black text-xl text-green-800">0</span></div><div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ปิด</button></form><button class="btn btn-success text-white" onclick="copyBillSummary()">Copy</button></div></div></dialog>
+    <dialog id="modal_finish" class="modal"><div class="modal-box text-center"><h3 class="font-bold text-lg">จบเกม Court <span id="fin-cid"></span></h3><div class="flex gap-2 justify-center mt-4"><button onclick="submitRes('A')" class="btn btn-primary flex-1">Team A ชนะ</button><button onclick="submitRes('B')" class="btn btn-error text-white flex-1">Team B ชนะ</button></div></div><form method="dialog" class="modal-backdrop"><button>close</button></form></dialog>
+    <dialog id="modal_edit_mmr" class="modal"><div class="modal-box"><h3 class="font-bold">แก้ไข MMR</h3><p id="edit-target-name" class="text-sm text-gray-500 mb-2"></p><input type="number" id="edit-new-mmr" class="input input-bordered w-full" placeholder="คะแนนใหม่"><div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ยกเลิก</button></form><button class="btn btn-primary" onclick="saveMMR()">บันทึก</button></div></div></dialog>
 
     <script>
         const LIFF_ID = "2009064792-6RT6YKWO";
-        let user = null, selectedCid = null, editTargetId = null;
-        let isSessionActive = false, globalEvents = [], globalAllPlayers = [];
+        let user = null; let isSessionActive = false; let globalEvents = []; let globalAllPlayers = [];
 
-        // --- SAFE SWITCH TAB ---
         function switchTab(t) {
             try {
-                // 1. Deactivate all buttons
                 document.querySelectorAll('.tab').forEach(e => e.classList.remove('tab-active'));
-                
-                // 2. Hide all contents
-                ['live','stats','history','rank','events'].forEach(x => {
-                    const el = document.getElementById('tab-'+x);
-                    if(el) el.classList.add('hidden');
-                });
-
-                // 3. Activate target
-                const targetBtn = document.getElementById('tab-btn-' + t);
-                const targetDiv = document.getElementById('tab-' + t);
-                
+                ['live','stats','history','rank','events'].forEach(x => { const el = document.getElementById('tab-'+x); if(el) el.classList.add('hidden'); });
+                const targetBtn = document.getElementById('tab-btn-' + t); const targetDiv = document.getElementById('tab-' + t);
                 if (targetBtn) targetBtn.classList.add('tab-active');
                 if (targetDiv) targetDiv.classList.remove('hidden');
-                else console.error("Tab content not found: tab-" + t);
-
-            } catch(e) {
-                console.error("Switch Tab Error:", e);
-                alert("เกิดข้อผิดพลาดในการเปลี่ยนหน้า: " + e.message);
-            }
+            } catch(e) { console.error("Switch Tab Error:", e); }
         }
 
         async function main() {
-            if (location.hostname.includes("localhost")) {
-                await apiLogin("U1cf933e3a1559608c50c0456f6583dc9", "Admin Pond", "https://ui-avatars.com/api/?name=A");
-            } else {
-                try {
-                    await liff.init({liffId: LIFF_ID});
-                    if(!liff.isLoggedIn()) { liff.login(); return; }
-                    const p = await liff.getProfile();
-                    await apiLogin(p.userId, p.displayName, p.pictureUrl);
-                } catch(e) { alert("LIFF Error: " + e); }
-            }
+            if (location.hostname.includes("localhost")) await apiLogin("U1cf933e3a1559608c50c0456f6583dc9", "Admin Pond", "https://ui-avatars.com/api/?name=A");
+            else { try { await liff.init({liffId: LIFF_ID}); if(!liff.isLoggedIn()) liff.login(); else { const p = await liff.getProfile(); await apiLogin(p.userId, p.displayName, p.pictureUrl); } } catch(e) { alert("LIFF Error: " + e); } }
         }
 
         async function apiLogin(uid, name, pic) {
             try {
                 const res = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:uid, displayName:name, pictureUrl:pic})});
                 if(!res.ok) throw new Error("Login failed");
-                user = await res.json(); 
-                renderUI(); 
-                refresh(); 
-                setInterval(refresh, 5000);
-            } catch(e) {
-                alert("เข้าสู่ระบบไม่ได้: " + e.message);
-            }
+                user = await res.json(); renderUI(); refresh(); setInterval(refresh, 5000);
+            } catch(e) { alert("Login Error: " + e.message); }
         }
 
         function renderUI() {
             if(!user) return;
-            try {
-                document.getElementById('my-img').src = user.pictureUrl;
-                document.getElementById('my-mmr').innerText = user.mmr;
-                document.getElementById('my-rank-text').innerText = user.rank_title;
-                
-                if(user.stats) {
-                    document.getElementById('st-wr').innerText = user.stats.win_rate + "%";
-                    document.getElementById('st-total').innerText = user.stats.total;
-                    document.getElementById('st-streak').innerText = user.stats.streak;
-                    document.getElementById('st-partner').innerText = user.stats.best_partner;
-                    document.getElementById('st-nemesis').innerText = user.stats.nemesis;
-                }
+            document.getElementById('my-img').src = user.pictureUrl;
+            document.getElementById('my-mmr').innerText = user.mmr;
+            document.getElementById('my-rank-text').innerText = user.rank_title;
+            
+            if(user.stats) {
+                document.getElementById('st-wr').innerText = user.stats.win_rate + "%";
+                document.getElementById('st-total').innerText = user.stats.total;
+                document.getElementById('st-streak').innerText = user.stats.streak;
+                document.getElementById('st-partner').innerText = user.stats.best_partner;
+                document.getElementById('st-nemesis').innerText = user.stats.nemesis;
+            }
 
-                // Render History
-                const hList = document.getElementById('history-list');
-                if (hList) {
-                    if(user.my_history && user.my_history.length > 0) {
-                        hList.innerHTML = user.my_history.map(m => {
-                            const myTeam = m.team_a_ids.includes(user.id) ? 'A' : 'B';
-                            const isWin = m.winner_team === myTeam;
-                            const resultBadge = isWin ? '<span class="badge badge-success text-white">W</span>' : '<span class="badge badge-error text-white">L</span>';
-                            let change = isWin ? "+25" : "-20";
-                            if(m.mmr_snapshot && m.mmr_snapshot[user.id]) change = m.mmr_snapshot[user.id].change;
-                            return `<tr><td>${resultBadge}</td><td class="text-xs"><div>${m.date.split(' ')[1]}</div></td><td class="text-right font-bold ${isWin?'text-green-600':'text-red-500'}">${change}</td></tr>`;
-                        }).join('');
-                    } else {
-                        hList.innerHTML = `<tr><td colspan="3" class="text-center p-4 text-gray-400">ยังไม่มีประวัติ</td></tr>`;
-                    }
-                }
+            const hList = document.getElementById('history-list');
+            if (hList && user.my_history) {
+                hList.innerHTML = user.my_history.length > 0 ? user.my_history.map(m => {
+                    const myTeam = m.team_a_ids.includes(user.id) ? 'A' : 'B';
+                    const isWin = m.winner_team === myTeam;
+                    let change = isWin ? "+25" : "-20";
+                    if(m.mmr_snapshot && m.mmr_snapshot[user.id]) change = m.mmr_snapshot[user.id].change;
+                    return `<tr><td>${isWin ? '<span class="badge badge-success text-white">W</span>' : '<span class="badge badge-error text-white">L</span>'}</td><td class="text-xs"><div>${m.date.split(' ')[1]}</div></td><td class="text-right font-bold ${isWin?'text-green-600':'text-red-500'}">${change}</td></tr>`;
+                }).join('') : `<tr><td colspan="3" class="text-center p-4 text-gray-400">ยังไม่มีประวัติ</td></tr>`;
+            }
 
-                const isStaff = (user.role === 'super' || user.role === 'mod');
-                if(isStaff) {
-                    document.getElementById('btn-admin').classList.remove('hidden');
-                    document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
-                    document.getElementById('staff-controls').classList.remove('hidden');
-                    document.getElementById('btn-bill').classList.remove('hidden');
-                    document.getElementById('mod-court-control').classList.remove('hidden');
-                }
-                if(user.role === 'super') document.getElementById('super-admin-section').classList.remove('hidden');
-            } catch(e) { console.error("Render UI Error:", e); }
+            const isStaff = (user.role === 'super' || user.role === 'mod');
+            if(isStaff) {
+                document.getElementById('btn-admin').classList.remove('hidden');
+                document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
+                document.getElementById('staff-controls').classList.remove('hidden');
+                document.getElementById('btn-bill').classList.remove('hidden');
+                document.getElementById('mod-court-control').classList.remove('hidden');
+            }
+            if(user.role === 'super') document.getElementById('super-admin-section').classList.remove('hidden');
         }
 
         async function refresh() {
@@ -298,22 +174,15 @@
                 const res = await fetch('/api/get_dashboard');
                 if(!res.ok) return;
                 const d = await res.json();
-                
-                globalEvents = d.events || []; 
-                globalAllPlayers = d.all_players || []; 
-                isSessionActive = d.system.is_session_active;
+                globalEvents = d.events || []; globalAllPlayers = d.all_players || []; isSessionActive = d.system.is_session_active;
 
                 const sessAlert = document.getElementById('session-alert');
                 const btnCheckin = document.getElementById('btn-checkin');
+                const reqBox = document.getElementById('partner-req-box');
                 
                 if(!isSessionActive) {
                     if(sessAlert) sessAlert.classList.remove('hidden');
-                    if(btnCheckin) {
-                        btnCheckin.disabled = true; 
-                        btnCheckin.innerText = "รอเปิดก๊วน..."; 
-                        btnCheckin.classList.add('btn-disabled');
-                    }
-                    const reqBox = document.getElementById('partner-req-box');
+                    if(btnCheckin) { btnCheckin.disabled = true; btnCheckin.innerText = "รอเปิดก๊วน..."; btnCheckin.classList.add('btn-disabled'); }
                     if(reqBox) reqBox.classList.add('hidden');
                 } else {
                     if(sessAlert) sessAlert.classList.add('hidden');
@@ -322,8 +191,7 @@
                 }
                 
                 document.getElementById('court-count-display').innerText = Object.keys(d.courts).length;
-                const cc = document.getElementById('courts-container'); 
-                cc.innerHTML = '';
+                const cc = document.getElementById('courts-container'); cc.innerHTML = '';
                 const isStaff = (user.role === 'super' || user.role === 'mod');
 
                 for(const [cid, m] of Object.entries(d.courts)) {
@@ -346,43 +214,66 @@
                     let reqHtml = '';
                     if(p.partner_req) {
                         const target = d.all_players.find(x => x.id === p.partner_req);
-                        if(target) reqHtml = `<span class="badge badge-xs badge-outline ml-1 text-gray-400">คู่ ${target.nickname}</span>`;
+                        if(target) reqHtml = `<span class="badge badge-xs badge-outline ml-1 text-indigo-500 gap-1"><i class="fa-solid fa-link"></i> คู่ ${target.nickname}</span>`;
                     }
                     return `<tr class="border-b"><td>${i+1}. ${p.nickname} ${reqHtml}</td><td class="text-right"><span class="badge badge-ghost badge-xs">${p.rank_title}</span></td></tr>`;
                 }).join('');
 
-                document.getElementById('lb-list').innerHTML = d.leaderboard.map((p,i) => `<tr><td class="font-bold text-gray-500">${i+1}</td><td><div class="flex flex-col"><div class="flex items-center gap-2"><div class="avatar"><div class="w-6 rounded-full"><img src="${p.pictureUrl}"></div></div><span class="text-sm font-bold">${p.nickname}</span></div></div></td><td class="text-right"><div class="font-mono font-bold text-indigo-600">${p.mmr}</div>${isStaff ? `<button onclick="openEditMMR('${p.id}', '${p.nickname}', ${p.mmr})" class="btn btn-xs btn-ghost text-gray-400"><i class="fa-solid fa-pen"></i></button>` : ''}</td></tr>`).join('');
-                document.getElementById('events-list').innerHTML = d.events.map(e => {
-                    return `<div class="card bg-white border border-gray-200 shadow-sm p-4"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg text-indigo-900">${e.name}</h4><div class="text-sm text-gray-500 mb-2"><i class="fa-regular fa-clock"></i> ${formatDate(e.datetime)}</div></div>${isStaff ? `<button onclick="deleteEvent('${e.id}')" class="btn btn-xs btn-circle btn-ghost text-red-400">🗑</button>` : ''}</div><button onclick="toggleEventJoin('${e.id}')" class="btn btn-sm w-full ${e.joined_users.some(u=>u.id===user.id) ? 'btn-error btn-outline' : 'btn-success text-white'}">${e.joined_users.some(u=>u.id===user.id) ? '❌ ยกเลิก' : '🙋‍♂️ ไปด้วย!'}</button></div>`;
-                }).join('');
-
-                // Update Partner Select Dropdown
+                // Update Partner Dropdown (Only ACTIVE players & Not myself)
                 const pSelect = document.getElementById('partner-select');
-                const manPSelects = document.querySelectorAll('.player-select');
-                
-                // Update Partner Request Dropdown (Only if empty to prevent reset)
-                if(pSelect && pSelect.children.length <= 1) {
-                     d.all_players.forEach(p => {
-                         if(p.id !== user.id) {
-                             const opt = document.createElement('option'); opt.value = p.id; opt.innerText = p.nickname;
-                             pSelect.appendChild(opt);
-                         }
-                     });
+                if(pSelect) {
+                    // Update only if dropdown is not focused (to avoid UX glitch)
+                    if (document.activeElement !== pSelect) {
+                        const currentVal = pSelect.value;
+                        pSelect.innerHTML = '<option disabled selected>-- เลือกเพื่อนที่ Check-in แล้ว --</option>';
+                        d.all_players.forEach(p => {
+                            if(p.id !== user.id && p.status === 'active') { // Filter ACTIVE only
+                                const opt = document.createElement('option'); opt.value = p.id; opt.innerText = p.nickname;
+                                pSelect.appendChild(opt);
+                            }
+                        });
+                        if(currentVal) pSelect.value = currentVal;
+                    }
                 }
                 
-                // Update Manual Match Dropdown (Only needed when modal opens, but keeping data fresh is good)
-                // We will populate this when modal opens instead to save performance
+                // Update Manual Match Dropdown (Only Active)
+                document.querySelectorAll('.player-select').forEach(s => {
+                    if(document.activeElement !== s && s.children.length <= 1) {
+                        s.innerHTML = '<option value="">-- เลือก --</option>';
+                        d.all_players.filter(p=>p.status==='active').forEach(p => {
+                            const opt = document.createElement('option'); opt.value=p.id; opt.innerText=p.nickname; s.appendChild(opt);
+                        });
+                    }
+                });
 
             } catch(e) { console.error("Refresh Error:", e); }
         }
 
         function updateCheckinBtn(status) {
-            const btn = document.getElementById('btn-checkin'); const badge = document.getElementById('status-badge'); const reqBox = document.getElementById('partner-req-box'); 
+            const btn = document.getElementById('btn-checkin'); const badge = document.getElementById('status-badge'); 
+            const reqBox = document.getElementById('partner-req-box'); 
+            const reqForm = document.getElementById('req-form');
+            const reqActive = document.getElementById('req-active');
+            
             if(!btn) return;
             btn.disabled = false; 
+            
             if (status === 'active') { 
                 btn.innerText = "❌ ลงชื่อออก"; btn.className = "btn btn-outline btn-error w-full"; badge.innerText = "รอคิว"; badge.className = "badge badge-success text-white"; 
-                if(reqBox) reqBox.classList.remove('hidden');
+                if(reqBox) {
+                    reqBox.classList.remove('hidden');
+                    // Check if already requested
+                    if(user.partner_req) {
+                        reqForm.classList.add('hidden');
+                        reqActive.classList.remove('hidden');
+                        // Find name
+                        const target = globalAllPlayers.find(p => p.id === user.partner_req);
+                        document.getElementById('req-target-name').innerText = target ? target.nickname : '...';
+                    } else {
+                        reqForm.classList.remove('hidden');
+                        reqActive.classList.add('hidden');
+                    }
+                }
             } else if (status === 'playing') { 
                 btn.innerText = "🏸 กำลังแข่งขัน"; btn.disabled = true; btn.className = "btn btn-disabled w-full"; badge.innerText = "กำลังเล่น"; badge.className = "badge badge-warning"; 
                 if(reqBox) reqBox.classList.add('hidden');
@@ -394,25 +285,67 @@
 
         async function requestPartner() {
             const targetId = document.getElementById('partner-select').value;
-            if(!targetId) return;
-            await fetch('/api/request_partner', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id, targetId:targetId})});
-            alert('ขอคู่เรียบร้อย! Mod จะเห็นชื่อคู่หูของคุณในคิว');
-            refresh();
+            if(!targetId) return alert("เลือกเพื่อนก่อนครับ");
+            const res = await fetch('/api/request_partner', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id, targetId:targetId})});
+            const r = await res.json();
+            if(r.error) alert(r.error);
+            else { alert('ส่งคำขอแล้ว!'); await apiLogin(user.id, user.nickname, user.pictureUrl); } // Reload user data
         }
 
-        function openManualMatch() {
-            const selects = document.querySelectorAll('.player-select');
-            selects.forEach(s => {
-                s.innerHTML = '<option value="">-- เลือก --</option>';
-                // Show ONLY active players for manual match
-                globalAllPlayers.filter(p=>p.status==='active').forEach(p => {
-                    const opt = document.createElement('option'); opt.value=p.id; opt.innerText=p.nickname;
-                    s.appendChild(opt);
-                });
+        async function cancelRequest() {
+            if(!confirm('ยกเลิกคำขอ?')) return;
+            await fetch('/api/cancel_request', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})});
+            await apiLogin(user.id, user.nickname, user.pictureUrl);
+        }
+
+        // ... (Billing, Session, Reset, Matchmake functions same as before) ...
+        async function resetSystem() { if(!confirm('⚠️ ล้างข้อมูลทั้งหมด?')) return; if(!confirm('⛔️ ยืนยันครั้งสุดท้าย!')) return; try { await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); alert('✅ ล้างข้อมูลเรียบร้อย!'); location.reload(); } catch(e) { alert('Error: ' + e); } }
+        async function toggleSession(action) { if(action==='end' && !confirm('⚠️ ยืนยันจบก๊วน?')) return; await fetch('/api/admin/toggle_session', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action, userId:user.id})}); location.reload(); }
+        async function changeCourtCount(delta) { const current = parseInt(document.getElementById('court-count-display').innerText); await fetch('/api/admin/update_courts', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:current+delta})}); refresh(); }
+        async function toggleMod(tid, val) { await fetch('/api/admin/manage_mod', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requesterId:user.id, targetUserId:tid, action:val?'promote':'demote'})}); }
+        async function submitRes(w) { const r = await(await fetch('/api/submit_result', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})})).json(); if(r.error) alert(r.error); document.getElementById('modal_finish').close(); refresh(); }
+        async function toggleStatus() { await fetch('/api/toggle_status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})}); apiLogin(user.id, user.nickname, user.pictureUrl); }
+        async function matchmake() { const r=await(await fetch('/api/matchmake',{method:'POST'})).json(); if(r.status!=='matched') alert(r.status==='full'?'เต็ม':'คนไม่พอ'); else refresh(); }
+        async function submitNewEvent() { const n=document.getElementById('evt-name').value, t=document.getElementById('evt-time').value; if(!n||!t) return; const timestamp = new Date(t).getTime() / 1000; await fetch('/api/event/create', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n, datetime:timestamp})}); document.getElementById('evt-name').value=''; document.getElementById('evt-time').value=''; refresh(); }
+        async function deleteEvent(eid) { if(confirm('ลบนะ?')) await fetch('/api/event/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid})}); refresh(); }
+        async function toggleEventJoin(eid) { await fetch('/api/event/join_toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid, userId:user.id})}); refresh(); }
+        function openEditMMR(uid, n, m) { editTargetId=uid; document.getElementById('edit-target-name').innerText=`แก้ไขคะแนนของ: ${n}`; document.getElementById('edit-new-mmr').value=m; document.getElementById('modal_edit_mmr').showModal(); }
+        async function saveMMR() { const v=document.getElementById('edit-new-mmr').value; if(!v) return; await fetch('/api/admin/set_mmr', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUserId:editTargetId, newMmr:v})}); document.getElementById('modal_edit_mmr').close(); refresh(); }
+        function formatDate(dt) { const dateObj = typeof dt === 'number' ? new Date(dt * 1000) : new Date(dt); return dateObj.toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); }
+        
+        async function openBillingModal() {
+            await refresh();
+            const select = document.getElementById('bill-event-select');
+            const now = Date.now() / 1000;
+            const pastEvents = globalEvents.filter(e => {
+                const eTime = typeof e.datetime === 'number' ? e.datetime : new Date(e.datetime).getTime()/1000;
+                return eTime <= now + 7200; 
             });
-            document.getElementById('modal_manual_match').showModal();
+            pastEvents.sort((a,b) => b.sort_key - a.sort_key);
+            const targetEvents = pastEvents.slice(0, 5);
+            select.innerHTML = '<option disabled selected>-- เลือก Session (5 ล่าสุด) --</option>';
+            targetEvents.forEach(e => { const opt = document.createElement('option'); opt.value = e.id; opt.innerText = `${e.name} (${formatDate(e.datetime)})`; select.appendChild(opt); });
+            document.getElementById('modal_billing').showModal();
         }
 
+        function loadBillPlayers() {
+            const eid = document.getElementById('bill-event-select').value; const showAll = document.getElementById('bill-show-all').checked; const evt = globalEvents.find(e => e.id === eid); const tbody = document.getElementById('bill-player-list'); const defHr = document.getElementById('bill-default-hr').value || 2;
+            tbody.innerHTML = '';
+            let candidates = [];
+            if (showAll) { candidates = window.globalAllPlayers; } else if (evt) {
+                let eventTimeMs = (typeof evt.datetime === 'number' ? evt.datetime * 1000 : new Date(evt.datetime).getTime());
+                const startTime = eventTimeMs - (2 * 3600 * 1000); const endTime = eventTimeMs + (6 * 3600 * 1000);
+                candidates = window.globalAllPlayers.filter(p => {
+                    const lastActiveMs = p.last_active * 1000;
+                    const inTime = (lastActiveMs >= startTime && lastActiveMs <= endTime);
+                    const isActiveNow = (p.status === 'active' || p.status === 'playing');
+                    return inTime || isActiveNow;
+                });
+            }
+            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบรายชื่อ (ลองกด "แสดงทุกคน")</td></tr>';
+            else { candidates.forEach(u => { tbody.innerHTML += `<tr class="bill-row" data-name="${u.nickname}"><td><div class="flex items-center gap-2"><img src="${u.pictureUrl}" class="w-6 h-6 rounded-full text-[10px]">${u.nickname}<button onclick="this.closest('tr').remove();calculateBill()" class="btn btn-xs btn-ghost text-red-400 rounded-full px-1">x</button></div></td><td><input type="number" class="input input-bordered input-xs w-full bill-hr" value="${defHr}" min="0" oninput="calculateBill()"></td><td><input type="number" class="input input-bordered input-xs w-full bill-min" value="0" min="0" step="5" oninput="calculateBill()"></td><td class="text-right font-bold bill-price">0</td></tr>`; }); }
+            calculateBill();
+        }
         async function submitManualMatch() {
             const courtId = document.getElementById('man-court').value;
             const p1 = document.getElementById('man-p1').value;
@@ -424,58 +357,6 @@
             await fetch('/api/matchmake/manual', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:user.id, courtId:courtId, playerIds:[p1,p2,p3,p4]})});
             document.getElementById('modal_manual_match').close(); refresh();
         }
-
-        async function openBillingModal() {
-            await refresh(); // Force data update
-            const select = document.getElementById('bill-event-select');
-            const now = Date.now() / 1000;
-            // Filter only past/active events within reasonable time
-            const pastEvents = globalEvents.filter(e => {
-                const eTime = typeof e.datetime === 'number' ? e.datetime : new Date(e.datetime).getTime()/1000;
-                return eTime <= now + 7200; // Allow slight future (2hr)
-            });
-            pastEvents.sort((a,b) => b.sort_key - a.sort_key);
-            const targetEvents = pastEvents.slice(0, 5);
-            select.innerHTML = '<option disabled selected>-- เลือก Session (5 ล่าสุด) --</option>';
-            targetEvents.forEach(e => { const opt = document.createElement('option'); opt.value = e.id; opt.innerText = `${e.name} (${formatDate(e.datetime)})`; select.appendChild(opt); });
-            document.getElementById('modal_billing').showModal();
-        }
-
-        function loadBillPlayers() {
-            const eid = document.getElementById('bill-event-select').value;
-            const showAll = document.getElementById('bill-show-all').checked;
-            const evt = globalEvents.find(e => e.id === eid);
-            const tbody = document.getElementById('bill-player-list');
-            const defHr = document.getElementById('bill-default-hr').value || 2;
-            tbody.innerHTML = '';
-            let candidates = [];
-            
-            if (showAll) {
-                candidates = window.globalAllPlayers;
-            } else if (evt) {
-                let eventTimeMs = (typeof evt.datetime === 'number' ? evt.datetime * 1000 : new Date(evt.datetime).getTime());
-                const startTime = eventTimeMs - (2 * 3600 * 1000); 
-                const endTime = eventTimeMs + (6 * 3600 * 1000);
-                candidates = window.globalAllPlayers.filter(p => {
-                    const lastActiveMs = p.last_active * 1000;
-                    const inTime = (lastActiveMs >= startTime && lastActiveMs <= endTime);
-                    // FIXED: Also include anyone currently active, just in case
-                    const isActiveNow = (p.status === 'active' || p.status === 'playing');
-                    return inTime || isActiveNow;
-                });
-            }
-            
-            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบรายชื่อ (ลองกด "แสดงทุกคน")</td></tr>';
-            else {
-                candidates.forEach(u => {
-                    tbody.innerHTML += `<tr class="bill-row" data-name="${u.nickname}"><td><div class="flex items-center gap-2"><img src="${u.pictureUrl}" class="w-6 h-6 rounded-full text-[10px]">${u.nickname}<button onclick="this.closest('tr').remove();calculateBill()" class="btn btn-xs btn-ghost text-red-400 rounded-full px-1">x</button></div></td><td><input type="number" class="input input-bordered input-xs w-full bill-hr" value="${defHr}" min="0" oninput="calculateBill()"></td><td><input type="number" class="input input-bordered input-xs w-full bill-min" value="0" min="0" step="5" oninput="calculateBill()"></td><td class="text-right font-bold bill-price">0</td></tr>`;
-                });
-            }
-            calculateBill();
-        }
-
-        // ... Existing helpers (calculateBill, copyBillSummary, resetSystem, toggleSession, etc.) ...
-        // (Include previous helper functions here unchanged for brevity, but they are essential!)
         function applyDefaultTime() { const def = document.getElementById('bill-default-hr').value; document.querySelectorAll('.bill-hr').forEach(el => el.value = def); document.querySelectorAll('.bill-min').forEach(el => el.value = 0); calculateBill(); }
         function calculateBill() {
             const totalCost = parseFloat(document.getElementById('bill-total-cost').value) || 0; const rows = document.querySelectorAll('.bill-row');
@@ -492,19 +373,6 @@
             txt += `------------------\nโอนแล้วส่งสลิปด้วยนะจ๊ะ 😘`;
             navigator.clipboard.writeText(txt).then(() => alert('คัดลอกสรุปยอดแล้ว! ไปแปะใน LINE ได้เลย'));
         }
-        async function resetSystem() { if(!confirm('⚠️ ล้างข้อมูลทั้งหมด?')) return; if(!confirm('⛔️ ยืนยันครั้งสุดท้าย!')) return; try { await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); alert('✅ ล้างข้อมูลเรียบร้อย!'); location.reload(); } catch(e) { alert('Error: ' + e); } }
-        async function toggleSession(action) { if(action==='end' && !confirm('⚠️ ยืนยันจบก๊วน?')) return; await fetch('/api/admin/toggle_session', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action, userId:user.id})}); location.reload(); }
-        async function changeCourtCount(delta) { const current = parseInt(document.getElementById('court-count-display').innerText); await fetch('/api/admin/update_courts', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:current+delta})}); refresh(); }
-        async function toggleMod(tid, val) { await fetch('/api/admin/manage_mod', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requesterId:user.id, targetUserId:tid, action:val?'promote':'demote'})}); }
-        async function submitRes(w) { const r = await(await fetch('/api/submit_result', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})})).json(); if(r.error) alert(r.error); document.getElementById('modal_finish').close(); refresh(); }
-        async function toggleStatus() { await fetch('/api/toggle_status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})}); apiLogin(user.id, user.nickname, user.pictureUrl); }
-        async function matchmake() { const r=await(await fetch('/api/matchmake',{method:'POST'})).json(); if(r.status!=='matched') alert(r.status==='full'?'เต็ม':'คนไม่พอ'); else refresh(); }
-        async function submitNewEvent() { const n=document.getElementById('evt-name').value, t=document.getElementById('evt-time').value; if(!n||!t) return; const timestamp = new Date(t).getTime() / 1000; await fetch('/api/event/create', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n, datetime:timestamp})}); document.getElementById('evt-name').value=''; document.getElementById('evt-time').value=''; refresh(); }
-        async function deleteEvent(eid) { if(confirm('ลบนะ?')) await fetch('/api/event/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid})}); refresh(); }
-        async function toggleEventJoin(eid) { await fetch('/api/event/join_toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid, userId:user.id})}); refresh(); }
-        function openEditMMR(uid, n, m) { editTargetId=uid; document.getElementById('edit-target-name').innerText=`แก้ไขคะแนนของ: ${n}`; document.getElementById('edit-new-mmr').value=m; document.getElementById('modal_edit_mmr').showModal(); }
-        async function saveMMR() { const v=document.getElementById('edit-new-mmr').value; if(!v) return; await fetch('/api/admin/set_mmr', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUserId:editTargetId, newMmr:v})}); document.getElementById('modal_edit_mmr').close(); refresh(); }
-        function formatDate(dt) { const dateObj = typeof dt === 'number' ? new Date(dt * 1000) : new Date(dt); return dateObj.toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); }
 
         main();
     </script>
