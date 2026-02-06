@@ -305,29 +305,21 @@
             catch(e) { alert('Error: ' + e); } finally { if(btnStart) { btnStart.disabled=false; btnStart.innerHTML='🚀 เริ่มก๊วน (Start Session)'; } if(btnEnd) { btnEnd.disabled=false; btnEnd.innerHTML='🏁 จบก๊วน (End Session)'; } }
         }
 
-        // ✅ NEW: LOGIC เลือก Event และ ดึงรายชื่อ
+        // ✅ FIXED BILLING: USE MILLISECONDS FOR COMPARISON
         function openBillingModal() {
             const select = document.getElementById('bill-event-select');
-            
-            // 1. กรองเฉพาะ Event ที่เกิดขึ้นแล้ว (ไม่เอาอนาคต) และเอาแค่ 5 อันล่าสุด
-            const now = Date.now() / 1000; // current time in seconds
+            const now = Date.now() / 1000;
             const pastEvents = globalEvents.filter(e => {
                 const eTime = typeof e.datetime === 'number' ? e.datetime : new Date(e.datetime).getTime()/1000;
-                return eTime <= now + 3600; // เผื่ออนาคตได้ 1 ชม. (กันพลาด)
+                return eTime <= now + 3600;
             });
-            
-            // เรียงใหม่ -> เก่า
             pastEvents.sort((a,b) => b.sort_key - a.sort_key);
-            
-            // ตัดเอาแค่ 5 อัน
-            const targetEvents = pastEvents.slice(0, 5);
+            const targetEvents = pastEvents.slice(0, 5); // 5 ล่าสุด
 
             select.innerHTML = '<option disabled selected>-- เลือก Session (5 ล่าสุด) --</option>';
             targetEvents.forEach(e => { 
-                const opt = document.createElement('option'); 
-                opt.value = e.id; 
-                opt.innerText = `${e.name} (${formatDate(e.datetime)})`; 
-                select.appendChild(opt); 
+                const opt = document.createElement('option'); opt.value = e.id; 
+                opt.innerText = `${e.name} (${formatDate(e.datetime)})`; select.appendChild(opt); 
             });
             document.getElementById('modal_billing').showModal();
         }
@@ -340,19 +332,22 @@
             tbody.innerHTML = '';
             if (!evt) return;
 
-            // ✅ Logic ดึงคน: ต้องเคย Check-in (Active) ในช่วงเวลานั้น
-            // ช่วงเวลาที่ยอมรับ: 1 ชม. ก่อนเริ่มก๊วน จนถึง 5 ชม. หลังเริ่มก๊วน
-            const eventTime = typeof evt.datetime === 'number' ? evt.datetime : new Date(evt.datetime).getTime()/1000;
-            const startTime = eventTime - (3600 * 1); // -1 hr
-            const endTime = eventTime + (3600 * 5);   // +5 hr
+            // ✅ Normalize Time to MS
+            let eventTimeMs = 0;
+            if (typeof evt.datetime === 'number') eventTimeMs = evt.datetime * 1000;
+            else eventTimeMs = new Date(evt.datetime).getTime();
+
+            // Window: -1hr to +5hr
+            const startTime = eventTimeMs - (3600 * 1000); 
+            const endTime = eventTimeMs + (5 * 3600 * 1000);   
             
             const candidates = window.globalAllPlayers.filter(p => {
-                // p.last_active เป็น timestamp (วินาที)
-                const la = p.last_active;
-                return la >= startTime && la <= endTime;
+                // p.last_active is in SECONDS (from backend) -> Convert to MS
+                const lastActiveMs = p.last_active * 1000;
+                return lastActiveMs >= startTime && lastActiveMs <= endTime;
             });
 
-            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบคน Active ในช่วงเวลานี้</td></tr>';
+            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบรายชื่อผู้เล่นในช่วงเวลานี้</td></tr>';
             else {
                 candidates.forEach(u => {
                     tbody.innerHTML += `
@@ -383,6 +378,13 @@
             navigator.clipboard.writeText(txt).then(() => alert('คัดลอกสรุปยอดแล้ว! ไปแปะใน LINE ได้เลย'));
         }
 
+        async function resetSystem() {
+            if(!confirm('⚠️ คุณแน่ใจนะว่าจะ "ล้างข้อมูลทั้งหมด"?')) return;
+            if(!confirm('⛔️ ยืนยันครั้งสุดท้าย! ข้อมูล Match History, Billing, MMR จะหายหมดและกู้คืนไม่ได้!')) return;
+            try { const res = await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); const r = await res.json();
+            if(r.error) alert(r.error); else { alert('✅ ล้างข้อมูลเรียบร้อย! เริ่มต้นใหม่ได้เลย'); location.reload(); } } catch(e) { alert('Error: ' + e); }
+        }
+
         async function changeCourtCount(delta) { const current = parseInt(document.getElementById('court-count-display').innerText); await fetch('/api/admin/update_courts', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:current+delta})}); refresh(); }
         async function toggleMod(tid, val) { await fetch('/api/admin/manage_mod', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requesterId:user.id, targetUserId:tid, action:val?'promote':'demote'})}); }
         async function submitRes(w) { const r = await(await fetch('/api/submit_result', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})})).json(); if(r.error) alert(r.error); document.getElementById('modal_finish').close(); refresh(); }
@@ -402,12 +404,6 @@
         function formatDate(dt) { 
             const dateObj = typeof dt === 'number' ? new Date(dt * 1000) : new Date(dt);
             return dateObj.toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); 
-        }
-        async function resetSystem() {
-            if(!confirm('⚠️ คุณแน่ใจนะว่าจะ "ล้างข้อมูลทั้งหมด"?')) return;
-            if(!confirm('⛔️ ยืนยันครั้งสุดท้าย! ข้อมูล Match History, Billing, MMR จะหายหมดและกู้คืนไม่ได้!')) return;
-            try { const res = await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); const r = await res.json();
-            if(r.error) alert(r.error); else { alert('✅ ล้างข้อมูลเรียบร้อย! เริ่มต้นใหม่ได้เลย'); location.reload(); } } catch(e) { alert('Error: ' + e); }
         }
 
         main();
