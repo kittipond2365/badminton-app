@@ -34,10 +34,11 @@
 
     <div class="px-2 mt-3">
         <div role="tablist" class="tabs tabs-boxed bg-white shadow-sm font-bold">
-            <a role="tab" class="tab tab-active" onclick="switchTab('live', this)">สนาม</a>
-            <a role="tab" class="tab" onclick="switchTab('stats', this)">สถิติ</a>
-            <a role="tab" class="tab" onclick="switchTab('history', this)">ประวัติ</a>
-            <a role="tab" class="tab" onclick="switchTab('events', this)">Events</a>
+            <a role="tab" id="tab-btn-live" class="tab tab-active" onclick="switchTab('live')">สนาม</a>
+            <a role="tab" id="tab-btn-stats" class="tab" onclick="switchTab('stats')">สถิติ</a>
+            <a role="tab" id="tab-btn-history" class="tab" onclick="switchTab('history')">ประวัติ</a>
+            <a role="tab" id="tab-btn-rank" class="tab" onclick="switchTab('rank')">Rank</a>
+            <a role="tab" id="tab-btn-events" class="tab" onclick="switchTab('events')">Events</a>
         </div>
     </div>
 
@@ -52,22 +53,16 @@
                     <span id="my-rank-text" class="text-xs font-bold text-gray-400">...</span>
                 </div>
                 <button id="btn-checkin" onclick="toggleStatus()" class="btn btn-indigo w-full">Loading...</button>
-                
                 <div id="partner-req-box" class="mt-2 hidden">
                     <div class="divider text-xs text-gray-400 my-1">หรือ</div>
                     <div class="join w-full">
-                        <select id="partner-select" class="select select-bordered select-sm w-full join-item text-xs">
-                            <option disabled selected>-- เลือกคู่หู (Request) --</option>
-                        </select>
+                        <select id="partner-select" class="select select-bordered select-sm w-full join-item text-xs"><option disabled selected>-- เลือกคู่หู --</option></select>
                         <button onclick="requestPartner()" class="btn btn-sm btn-primary join-item">ขอ</button>
                     </div>
-                    <div id="my-req-status" class="text-xs text-center text-indigo-500 mt-1"></div>
                 </div>
             </div>
         </div>
-
         <div id="courts-container" class="space-y-3 mb-6"></div>
-
         <div id="mod-court-control" class="hidden flex justify-between items-center bg-gray-200 p-2 rounded mb-4">
              <div class="join">
                 <button onclick="changeCourtCount(-1)" class="btn btn-xs join-item">-</button>
@@ -79,19 +74,11 @@
         <div id="staff-controls" class="hidden mb-6">
             <button onclick="matchmake()" class="btn btn-neutral w-full shadow-lg"><i class="fa-solid fa-shuffle"></i> จับคู่อัตโนมัติ</button>
         </div>
-        
         <div class="bg-white rounded-xl shadow-sm overflow-hidden">
             <div class="bg-gray-50 px-4 py-2 border-b font-bold text-gray-600 flex justify-between">
                 <span>คิวรอเล่น</span><span id="q-count" class="badge badge-neutral">0</span>
             </div>
             <table class="table table-sm"><tbody id="queue-list"></tbody></table>
-        </div>
-        
-        <div class="mt-6">
-            <h3 class="font-bold text-gray-500 px-2 mb-2">Leaderboard</h3>
-            <div class="overflow-x-auto bg-white rounded-xl shadow-sm">
-                <table class="table table-xs"><thead><tr class="bg-gray-100"><th>#</th><th>Player</th><th class="text-right">MMR</th></tr></thead><tbody id="lb-list"></tbody></table>
-            </div>
         </div>
     </div>
 
@@ -100,7 +87,7 @@
             <div class="card-body p-5 text-center">
                 <h2 class="text-lg font-bold opacity-80">WIN RATE</h2>
                 <div class="text-5xl font-black my-2" id="st-wr">0%</div>
-                <div class="flex justify-center gap-4 text-sm opacity-90"><span>🏆 Total Matches: <b id="st-total">0</b></span></div>
+                <div class="flex justify-center gap-4 text-sm opacity-90"><span>🏆 Matches: <b id="st-total">0</b></span></div>
             </div>
         </div>
         <div class="grid grid-cols-2 gap-3 mb-4">
@@ -111,49 +98,38 @@
     </div>
 
     <div id="tab-history" class="p-4 max-w-md mx-auto hidden">
-        <h3 class="font-bold text-gray-500 mb-2">ประวัติการแข่งของคุณ</h3>
+        <h3 class="font-bold text-gray-500 mb-2">ประวัติการแข่ง</h3>
         <div class="bg-white rounded-xl shadow-sm overflow-hidden">
             <table class="table table-xs">
                 <thead><tr class="bg-gray-100"><th>ผล</th><th>รายละเอียด</th><th class="text-right">MMR</th></tr></thead>
-                <tbody id="history-list">
-                    </tbody>
+                <tbody id="history-list"></tbody>
             </table>
+        </div>
+    </div>
+
+    <div id="tab-rank" class="p-4 max-w-md mx-auto hidden">
+        <div class="overflow-x-auto bg-white rounded-xl shadow-sm">
+            <table class="table table-xs"><thead><tr class="bg-gray-100"><th>#</th><th>Player</th><th class="text-right">MMR</th></tr></thead><tbody id="lb-list"></tbody></table>
         </div>
     </div>
 
     <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
         <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow">
-            <h3 class="font-bold text-sm mb-2">➕ สร้าง Event ใหม่</h3>
+            <h3 class="font-bold text-sm mb-2">➕ สร้าง Event</h3>
             <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน">
             <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
             <button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button>
         </div>
-        <h3 class="font-bold text-gray-500 mb-2">รายการก๊วนแบด</h3>
         <div id="events-list" class="space-y-4"></div>
     </div>
 
     <dialog id="modal_manual_match" class="modal">
         <div class="modal-box">
-            <h3 class="font-bold text-lg mb-4">🖐 จัดตัวเอง (Manual Match)</h3>
-            <div class="form-control w-full mb-2">
-                <label class="label"><span class="label-text">เลือกสนาม</span></label>
-                <select id="man-court" class="select select-bordered select-sm">
-                    <option value="1">Court 1</option>
-                    <option value="2">Court 2</option>
-                </select>
-            </div>
-            
+            <h3 class="font-bold text-lg mb-4">🖐 จัดตัวเอง</h3>
+            <select id="man-court" class="select select-bordered select-sm w-full mb-2"><option value="1">Court 1</option><option value="2">Court 2</option></select>
             <div class="grid grid-cols-2 gap-2 mb-4">
-                <div class="bg-red-50 p-2 rounded">
-                    <div class="font-bold text-red-500 text-xs mb-1">TEAM A</div>
-                    <select id="man-p1" class="select select-bordered select-xs w-full mb-1 player-select"><option>-- P1 --</option></select>
-                    <select id="man-p2" class="select select-bordered select-xs w-full player-select"><option>-- P2 --</option></select>
-                </div>
-                <div class="bg-blue-50 p-2 rounded">
-                    <div class="font-bold text-blue-500 text-xs mb-1">TEAM B</div>
-                    <select id="man-p3" class="select select-bordered select-xs w-full mb-1 player-select"><option>-- P3 --</option></select>
-                    <select id="man-p4" class="select select-bordered select-xs w-full player-select"><option>-- P4 --</option></select>
-                </div>
+                <div class="bg-red-50 p-2 rounded"><div class="font-bold text-red-500 text-xs">TEAM A</div><select id="man-p1" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p2" class="select select-bordered select-xs w-full player-select"></select></div>
+                <div class="bg-blue-50 p-2 rounded"><div class="font-bold text-blue-500 text-xs">TEAM B</div><select id="man-p3" class="select select-bordered select-xs w-full mb-1 player-select"></select><select id="man-p4" class="select select-bordered select-xs w-full player-select"></select></div>
             </div>
             <button onclick="submitManualMatch()" class="btn btn-primary w-full">เริ่มแข่ง</button>
             <form method="dialog" class="mt-2 text-center"><button class="btn btn-ghost btn-sm">ปิด</button></form>
@@ -162,20 +138,17 @@
 
     <dialog id="modal_admin" class="modal">
         <div class="modal-box">
-            <h3 class="font-bold text-lg mb-4 text-red-600"><i class="fa-solid fa-user-secret"></i> Control Panel</h3>
+            <h3 class="font-bold text-lg mb-4 text-red-600">Admin Panel</h3>
             <div class="mb-6 p-4 bg-red-50 rounded-lg border border-red-100">
-                <h4 class="font-bold text-sm mb-2">ควบคุมก๊วน (Session)</h4>
-                <div id="session-controls">
-                    <button id="btn-sess-start" onclick="toggleSession('start')" class="btn btn-success text-white w-full mb-2">🚀 เริ่มก๊วน (Start Session)</button>
-                    <button id="btn-sess-end" onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน (End Session)</button>
-                </div>
+                <h4 class="font-bold text-sm mb-2">Session Control</h4>
+                <button id="btn-sess-start" onclick="toggleSession('start')" class="btn btn-success text-white w-full mb-2">🚀 เริ่มก๊วน</button>
+                <button id="btn-sess-end" onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน</button>
             </div>
             <div id="super-admin-section" class="mb-4 hidden">
-                <h4 class="font-bold text-sm mb-2 text-indigo-600"><i class="fa-solid fa-crown"></i> แต่งตั้ง Moderator</h4>
-                <div class="h-48 overflow-y-auto border rounded p-2 bg-white"><table class="table table-xs"><thead><tr><th>ชื่อ</th><th class="text-right">Mod</th></tr></thead><tbody id="admin-user-list"></tbody></table></div>
+                <h4 class="font-bold text-sm mb-2">Moderators</h4>
+                <div class="h-48 overflow-y-auto border rounded p-2 bg-white"><table class="table table-xs"><tbody id="admin-user-list"></tbody></table></div>
                 <div class="mt-4 pt-4 border-t">
-                    <h4 class="font-bold text-sm mb-2 text-red-600">⚠️ Danger Zone</h4>
-                    <button onclick="resetSystem()" class="btn btn-outline btn-error btn-sm w-full"><i class="fa-solid fa-bomb"></i> ล้างข้อมูลทั้งหมด (Factory Reset)</button>
+                    <button onclick="resetSystem()" class="btn btn-outline btn-error btn-sm w-full">⚠️ Factory Reset</button>
                 </div>
             </div>
             <div class="modal-action"><form method="dialog"><button class="btn">ปิด</button></form></div>
@@ -184,30 +157,19 @@
 
     <dialog id="modal_billing" class="modal">
         <div class="modal-box w-11/12 max-w-2xl">
-            <h3 class="font-bold text-lg mb-2"><i class="fa-solid fa-calculator text-green-600"></i> คำนวณค่าก๊วน</h3>
+            <h3 class="font-bold text-lg mb-2 text-green-600">💰 Billing</h3>
             <div class="grid grid-cols-1 gap-3 mb-4 bg-gray-50 p-3 rounded-lg border">
-                <div>
-                    <label class="label-text font-bold">1. เลือก Session (5 ล่าสุด)</label>
-                    <select id="bill-event-select" class="select select-bordered select-sm w-full" onchange="loadBillPlayers()"><option disabled selected>-- เลือก --</option></select>
-                </div>
+                <select id="bill-event-select" class="select select-bordered select-sm w-full" onchange="loadBillPlayers()"><option disabled selected>-- เลือก Session --</option></select>
                 <div class="grid grid-cols-2 gap-2">
-                    <div><label class="label-text font-bold">2. รวม (บาท)</label><input id="bill-total-cost" type="number" class="input input-bordered input-sm w-full" placeholder="2500" oninput="calculateBill()"></div>
-                    <div><label class="label-text font-bold">3. เวลา Default</label><input id="bill-default-hr" type="number" class="input input-bordered input-sm w-full" value="2" oninput="applyDefaultTime()"></div>
+                    <input id="bill-total-cost" type="number" class="input input-bordered input-sm w-full" placeholder="ค่าใช้จ่ายรวม" oninput="calculateBill()">
+                    <input id="bill-default-hr" type="number" class="input input-bordered input-sm w-full" value="2" oninput="applyDefaultTime()">
                 </div>
-                <div class="form-control">
-                    <label class="label cursor-pointer justify-start gap-2">
-                        <input type="checkbox" id="bill-show-all" class="checkbox checkbox-sm checkbox-primary" onchange="loadBillPlayers()">
-                        <span class="label-text font-bold text-gray-500">แสดงทุกคน (ถ้าหาไม่เจอ)</span>
-                    </label>
-                </div>
+                <label class="label cursor-pointer justify-start gap-2"><input type="checkbox" id="bill-show-all" class="checkbox checkbox-sm checkbox-primary" onchange="loadBillPlayers()"><span class="label-text font-bold text-gray-500">แสดงทุกคน</span></label>
             </div>
-            <div class="overflow-x-auto max-h-64 mb-4 border rounded">
-                <table class="table table-xs table-pin-rows"><thead><tr class="bg-gray-200"><th>ชื่อ</th><th class="w-16">ชม.</th><th class="w-16">นาที</th><th class="text-right">บาท</th></tr></thead><tbody id="bill-player-list"></tbody></table>
-            </div>
-            <div class="flex justify-between items-center bg-green-100 p-3 rounded mb-4"><span class="font-bold text-green-800">รวมยอดเก็บได้:</span><span id="bill-grand-total" class="font-black text-xl text-green-800">0</span></div>
-            <div class="modal-action"><button class="btn btn-ghost" onclick="document.getElementById('modal_billing').close()">ปิด</button><button class="btn btn-success text-white" onclick="copyBillSummary()">Copy สรุป</button></div>
+            <div class="overflow-x-auto max-h-64 mb-4 border rounded"><table class="table table-xs table-pin-rows"><thead><tr class="bg-gray-200"><th>ชื่อ</th><th class="w-16">ชม.</th><th class="w-16">นาที</th><th class="text-right">บาท</th></tr></thead><tbody id="bill-player-list"></tbody></table></div>
+            <div class="flex justify-between items-center bg-green-100 p-3 rounded mb-4"><span class="font-bold text-green-800">รวม:</span><span id="bill-grand-total" class="font-black text-xl text-green-800">0</span></div>
+            <div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ปิด</button></form><button class="btn btn-success text-white" onclick="copyBillSummary()">Copy</button></div>
         </div>
-        <form method="dialog" class="modal-backdrop"><button>close</button></form>
     </dialog>
 
     <dialog id="modal_finish" class="modal">
@@ -224,9 +186,9 @@
     <dialog id="modal_edit_mmr" class="modal">
         <div class="modal-box">
             <h3 class="font-bold">แก้ไข MMR</h3>
-            <p class="text-sm text-gray-500 mb-2" id="edit-target-name"></p>
+            <p id="edit-target-name" class="text-sm text-gray-500 mb-2"></p>
             <input type="number" id="edit-new-mmr" class="input input-bordered w-full" placeholder="คะแนนใหม่">
-            <div class="modal-action"><button class="btn btn-ghost" onclick="document.getElementById('modal_edit_mmr').close()">ยกเลิก</button><button class="btn btn-primary" onclick="saveMMR()">บันทึก</button></div>
+            <div class="modal-action"><form method="dialog"><button class="btn btn-ghost">ยกเลิก</button></form><button class="btn btn-primary" onclick="saveMMR()">บันทึก</button></div>
         </div>
     </dialog>
 
@@ -235,11 +197,30 @@
         let user = null, selectedCid = null, editTargetId = null;
         let isSessionActive = false, globalEvents = [], globalAllPlayers = [];
 
-        function switchTab(t, btn) {
-            document.querySelectorAll('.tab').forEach(e=>e.classList.remove('tab-active'));
-            if(btn) btn.classList.add('tab-active');
-            ['live','stats','history','rank','events'].forEach(x => document.getElementById('tab-'+x).classList.add('hidden'));
-            document.getElementById('tab-'+t).classList.remove('hidden');
+        // --- SAFE SWITCH TAB ---
+        function switchTab(t) {
+            try {
+                // 1. Deactivate all buttons
+                document.querySelectorAll('.tab').forEach(e => e.classList.remove('tab-active'));
+                
+                // 2. Hide all contents
+                ['live','stats','history','rank','events'].forEach(x => {
+                    const el = document.getElementById('tab-'+x);
+                    if(el) el.classList.add('hidden');
+                });
+
+                // 3. Activate target
+                const targetBtn = document.getElementById('tab-btn-' + t);
+                const targetDiv = document.getElementById('tab-' + t);
+                
+                if (targetBtn) targetBtn.classList.add('tab-active');
+                if (targetDiv) targetDiv.classList.remove('hidden');
+                else console.error("Tab content not found: tab-" + t);
+
+            } catch(e) {
+                console.error("Switch Tab Error:", e);
+                alert("เกิดข้อผิดพลาดในการเปลี่ยนหน้า: " + e.message);
+            }
         }
 
         async function main() {
@@ -251,167 +232,166 @@
                     if(!liff.isLoggedIn()) { liff.login(); return; }
                     const p = await liff.getProfile();
                     await apiLogin(p.userId, p.displayName, p.pictureUrl);
-                } catch(e) { alert(e); }
+                } catch(e) { alert("LIFF Error: " + e); }
             }
         }
 
         async function apiLogin(uid, name, pic) {
-            const res = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:uid, displayName:name, pictureUrl:pic})});
-            user = await res.json(); renderUI(); refresh(); setInterval(refresh, 5000);
+            try {
+                const res = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:uid, displayName:name, pictureUrl:pic})});
+                if(!res.ok) throw new Error("Login failed");
+                user = await res.json(); 
+                renderUI(); 
+                refresh(); 
+                setInterval(refresh, 5000);
+            } catch(e) {
+                alert("เข้าสู่ระบบไม่ได้: " + e.message);
+            }
         }
 
         function renderUI() {
-            document.getElementById('my-img').src = user.pictureUrl;
-            document.getElementById('my-mmr').innerText = user.mmr;
-            document.getElementById('my-rank-text').innerText = user.rank_title;
-            const s = user.stats;
-            document.getElementById('st-wr').innerText = s.win_rate + "%";
-            document.getElementById('st-total').innerText = s.total;
-            document.getElementById('st-streak').innerText = s.streak;
-            document.getElementById('st-partner').innerText = s.best_partner;
-            document.getElementById('st-nemesis').innerText = s.nemesis;
-            
-            // HISTORY TAB
-            const hList = document.getElementById('history-list');
-            if(user.my_history && user.my_history.length > 0) {
-                hList.innerHTML = user.my_history.map(m => {
-                    const myTeam = m.team_a_ids.includes(user.id) ? 'A' : 'B';
-                    const isWin = m.winner_team === myTeam;
-                    const resultBadge = isWin ? '<span class="badge badge-success text-white">W</span>' : '<span class="badge badge-error text-white">L</span>';
-                    
-                    // MMR Snapshot logic
-                    let mmrChange = "0";
-                    let oldMmr = "...";
-                    let newMmr = "...";
-                    if(m.mmr_snapshot && m.mmr_snapshot[user.id]) {
-                        const snap = m.mmr_snapshot[user.id];
-                        mmrChange = snap.change;
-                        oldMmr = snap.old;
-                        newMmr = snap.new;
+            if(!user) return;
+            try {
+                document.getElementById('my-img').src = user.pictureUrl;
+                document.getElementById('my-mmr').innerText = user.mmr;
+                document.getElementById('my-rank-text').innerText = user.rank_title;
+                
+                if(user.stats) {
+                    document.getElementById('st-wr').innerText = user.stats.win_rate + "%";
+                    document.getElementById('st-total').innerText = user.stats.total;
+                    document.getElementById('st-streak').innerText = user.stats.streak;
+                    document.getElementById('st-partner').innerText = user.stats.best_partner;
+                    document.getElementById('st-nemesis').innerText = user.stats.nemesis;
+                }
+
+                // Render History
+                const hList = document.getElementById('history-list');
+                if (hList) {
+                    if(user.my_history && user.my_history.length > 0) {
+                        hList.innerHTML = user.my_history.map(m => {
+                            const myTeam = m.team_a_ids.includes(user.id) ? 'A' : 'B';
+                            const isWin = m.winner_team === myTeam;
+                            const resultBadge = isWin ? '<span class="badge badge-success text-white">W</span>' : '<span class="badge badge-error text-white">L</span>';
+                            let change = isWin ? "+25" : "-20";
+                            if(m.mmr_snapshot && m.mmr_snapshot[user.id]) change = m.mmr_snapshot[user.id].change;
+                            return `<tr><td>${resultBadge}</td><td class="text-xs"><div>${m.date.split(' ')[1]}</div></td><td class="text-right font-bold ${isWin?'text-green-600':'text-red-500'}">${change}</td></tr>`;
+                        }).join('');
                     } else {
-                        // Fallback logic if snapshot missing (old data)
-                        mmrChange = isWin ? "+25" : "-20";
+                        hList.innerHTML = `<tr><td colspan="3" class="text-center p-4 text-gray-400">ยังไม่มีประวัติ</td></tr>`;
                     }
-                    const changeColor = isWin ? "text-green-600" : "text-red-500";
+                }
 
-                    return `
-                    <tr>
-                        <td>${resultBadge}</td>
-                        <td class="text-xs">
-                            <div class="font-bold">${m.date.split(' ')[1]}</div>
-                            <div class="text-gray-400">vs ${myTeam==='A' ? m.team_b.join(',') : m.team_a.join(',')}</div>
-                        </td>
-                        <td class="text-right">
-                            <div class="text-[10px] text-gray-400">${oldMmr} -> ${newMmr}</div>
-                            <div class="font-bold ${changeColor}">${mmrChange}</div>
-                        </td>
-                    </tr>`;
-                }).join('');
-            } else {
-                hList.innerHTML = `<tr><td colspan="3" class="text-center p-4 text-gray-400">ยังไม่มีประวัติ</td></tr>`;
-            }
-
-            const isStaff = (user.role === 'super' || user.role === 'mod');
-            if(isStaff) {
-                document.getElementById('btn-admin').classList.remove('hidden');
-                document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
-                document.getElementById('staff-controls').classList.remove('hidden');
-                document.getElementById('btn-bill').classList.remove('hidden');
-                document.getElementById('mod-court-control').classList.remove('hidden');
-            }
-            if(user.role === 'super') document.getElementById('super-admin-section').classList.remove('hidden');
+                const isStaff = (user.role === 'super' || user.role === 'mod');
+                if(isStaff) {
+                    document.getElementById('btn-admin').classList.remove('hidden');
+                    document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
+                    document.getElementById('staff-controls').classList.remove('hidden');
+                    document.getElementById('btn-bill').classList.remove('hidden');
+                    document.getElementById('mod-court-control').classList.remove('hidden');
+                }
+                if(user.role === 'super') document.getElementById('super-admin-section').classList.remove('hidden');
+            } catch(e) { console.error("Render UI Error:", e); }
         }
 
         async function refresh() {
-            const d = await(await fetch('/api/get_dashboard')).json();
-            globalEvents = d.events; globalAllPlayers = d.all_players; isSessionActive = d.system.is_session_active;
+            try {
+                const res = await fetch('/api/get_dashboard');
+                if(!res.ok) return;
+                const d = await res.json();
+                
+                globalEvents = d.events || []; 
+                globalAllPlayers = d.all_players || []; 
+                isSessionActive = d.system.is_session_active;
 
-            if(!isSessionActive) {
-                document.getElementById('session-alert').classList.remove('hidden');
-                updateCheckinBtn('offline');
-                const btn = document.getElementById('btn-checkin'); btn.disabled = true; btn.innerText = "รอเปิดก๊วน..."; btn.classList.add('btn-disabled');
-                document.getElementById('partner-req-box').classList.add('hidden');
-            } else {
-                document.getElementById('session-alert').classList.add('hidden');
-                document.getElementById('btn-checkin').classList.remove('btn-disabled');
-                updateCheckinBtn(user.status);
-            }
-            
-            document.getElementById('court-count-display').innerText = Object.keys(d.courts).length;
-            const cc = document.getElementById('courts-container'); cc.innerHTML = '';
-            const isStaff = (user.role === 'super' || user.role === 'mod');
-
-            for(const [cid, m] of Object.entries(d.courts)) {
-                if(m) {
-                    const min = Math.floor(m.elapsed/60);
-                    const amIPlaying = m.team_a_ids.includes(user.id) || m.team_b_ids.includes(user.id);
-                    const canEnd = isStaff || amIPlaying;
-                    const renderTeam = (teamData) => teamData.map(p => `<div class="flex items-center gap-1"><img src="${p.pictureUrl}" class="w-5 h-5 rounded-full border border-gray-200"><span class="truncate max-w-[80px]">${p.name}</span></div>`).join('');
-                    cc.innerHTML += `
-                    <div class="card bg-white border border-indigo-100 shadow-sm p-3">
-                        <div class="flex justify-between text-indigo-700 font-bold mb-2"><span>COURT ${cid}</span><span class="badge badge-outline">${min} min</span></div>
-                        <div class="flex items-start justify-between text-sm">
-                            <div class="flex flex-col gap-1 w-[45%] items-end text-right font-medium">${renderTeam(m.team_a_data)}</div>
-                            <div class="font-bold text-red-500 self-center">VS</div>
-                            <div class="flex flex-col gap-1 w-[45%] items-start text-left font-medium">${renderTeam(m.team_b_data)}</div>
-                        </div>
-                        ${canEnd ? `<button onclick="selectedCid=${cid};document.getElementById('modal_finish').showModal();document.getElementById('fin-cid').innerText=${cid}" class="btn btn-xs btn-error text-white w-full mt-2">จบเกม</button>` : ''}
-                    </div>`;
+                const sessAlert = document.getElementById('session-alert');
+                const btnCheckin = document.getElementById('btn-checkin');
+                
+                if(!isSessionActive) {
+                    if(sessAlert) sessAlert.classList.remove('hidden');
+                    if(btnCheckin) {
+                        btnCheckin.disabled = true; 
+                        btnCheckin.innerText = "รอเปิดก๊วน..."; 
+                        btnCheckin.classList.add('btn-disabled');
+                    }
+                    const reqBox = document.getElementById('partner-req-box');
+                    if(reqBox) reqBox.classList.add('hidden');
                 } else {
-                    cc.innerHTML += `<div class="p-4 border-2 border-dashed rounded text-center text-gray-400 text-sm">Court ${cid} ว่าง</div>`;
+                    if(sessAlert) sessAlert.classList.add('hidden');
+                    if(btnCheckin) btnCheckin.classList.remove('btn-disabled');
+                    updateCheckinBtn(user.status);
                 }
-            }
+                
+                document.getElementById('court-count-display').innerText = Object.keys(d.courts).length;
+                const cc = document.getElementById('courts-container'); 
+                cc.innerHTML = '';
+                const isStaff = (user.role === 'super' || user.role === 'mod');
 
-            if(user.role === 'super' && d.all_players) {
-                document.getElementById('admin-user-list').innerHTML = d.all_players.map(p => `<tr><td>${p.nickname}</td><td class="text-right"><input type="checkbox" class="toggle toggle-xs toggle-success" ${p.is_mod?'checked':''} onchange="toggleMod('${p.id}',this.checked)"></td></tr>`).join('');
-            }
-            document.getElementById('q-count').innerText = d.queue_count;
-            
-            // Queue Render (With Partner Req Info)
-            document.getElementById('queue-list').innerHTML = d.queue.map((p,i) => {
-                let reqHtml = '';
-                if(p.partner_req) {
-                    const target = d.all_players.find(x => x.id === p.partner_req);
-                    if(target) reqHtml = `<span class="badge badge-xs badge-outline ml-1 text-gray-400"><i class="fa-solid fa-link"></i> ${target.nickname}</span>`;
+                for(const [cid, m] of Object.entries(d.courts)) {
+                    if(m) {
+                        const min = Math.floor(m.elapsed/60);
+                        const canEnd = isStaff || m.team_a_ids.includes(user.id) || m.team_b_ids.includes(user.id);
+                        const renderTeam = (teamData) => teamData.map(p => `<div class="flex items-center gap-1"><img src="${p.pic}" class="w-5 h-5 rounded-full"><span class="truncate max-w-[80px]">${p.name}</span></div>`).join('');
+                        cc.innerHTML += `<div class="card bg-white border border-indigo-100 shadow-sm p-3"><div class="flex justify-between text-indigo-700 font-bold mb-2"><span>COURT ${cid}</span><span class="badge badge-outline">${min} min</span></div><div class="flex items-start justify-between text-sm"><div class="flex flex-col gap-1 w-[45%] items-end text-right font-medium">${renderTeam(m.team_a_data)}</div><div class="font-bold text-red-500 self-center">VS</div><div class="flex flex-col gap-1 w-[45%] items-start text-left font-medium">${renderTeam(m.team_b_data)}</div></div>${canEnd ? `<button onclick="selectedCid=${cid};document.getElementById('modal_finish').showModal();document.getElementById('fin-cid').innerText=${cid}" class="btn btn-xs btn-error text-white w-full mt-2">จบเกม</button>` : ''}</div>`;
+                    } else {
+                        cc.innerHTML += `<div class="p-4 border-2 border-dashed rounded text-center text-gray-400 text-sm">Court ${cid} ว่าง</div>`;
+                    }
                 }
-                return `<tr class="border-b"><td>${i+1}. ${p.nickname} ${reqHtml}</td><td class="text-right"><span class="badge badge-ghost badge-xs">${p.rank_title}</span></td></tr>`;
-            }).join('');
 
-            document.getElementById('lb-list').innerHTML = d.leaderboard.map((p,i) => `<tr><td class="font-bold text-gray-500">${i+1}</td><td><div class="flex flex-col"><div class="flex items-center gap-2"><div class="avatar"><div class="w-6 rounded-full"><img src="${p.pictureUrl}"></div></div><span class="text-sm font-bold">${p.nickname}</span></div><span class="text-[10px] text-gray-400 ml-8">${p.rank_title}</span></div></td><td class="text-right"><div class="font-mono font-bold text-indigo-600">${p.mmr}</div>${isStaff ? `<button onclick="openEditMMR('${p.id}', '${p.nickname}', ${p.mmr})" class="btn btn-xs btn-ghost text-gray-400"><i class="fa-solid fa-pen"></i></button>` : ''}</td></tr>`).join('');
-            document.getElementById('events-list').innerHTML = d.events.map(e => {
-                return `<div class="card bg-white border border-gray-200 shadow-sm p-4"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg text-indigo-900">${e.name}</h4><div class="text-sm text-gray-500 mb-2"><i class="fa-regular fa-clock"></i> ${formatDate(e.datetime)}</div></div>${isStaff ? `<button onclick="deleteEvent('${e.id}')" class="btn btn-xs btn-circle btn-ghost text-red-400">🗑</button>` : ''}</div><button onclick="toggleEventJoin('${e.id}')" class="btn btn-sm w-full ${e.joined_users.some(u=>u.id===user.id) ? 'btn-error btn-outline' : 'btn-success text-white'}">${e.joined_users.some(u=>u.id===user.id) ? '❌ ยกเลิก' : '🙋‍♂️ ไปด้วย!'}</button></div>`;
-            }).join('');
+                if(user.role === 'super' && d.all_players) {
+                    document.getElementById('admin-user-list').innerHTML = d.all_players.map(p => `<tr><td>${p.nickname}</td><td class="text-right"><input type="checkbox" class="toggle toggle-xs toggle-success" ${p.is_mod?'checked':''} onchange="toggleMod('${p.id}',this.checked)"></td></tr>`).join('');
+                }
+                
+                document.getElementById('q-count').innerText = d.queue_count;
+                document.getElementById('queue-list').innerHTML = d.queue.map((p,i) => {
+                    let reqHtml = '';
+                    if(p.partner_req) {
+                        const target = d.all_players.find(x => x.id === p.partner_req);
+                        if(target) reqHtml = `<span class="badge badge-xs badge-outline ml-1 text-gray-400">คู่ ${target.nickname}</span>`;
+                    }
+                    return `<tr class="border-b"><td>${i+1}. ${p.nickname} ${reqHtml}</td><td class="text-right"><span class="badge badge-ghost badge-xs">${p.rank_title}</span></td></tr>`;
+                }).join('');
 
-            // Partner Select Update
-            const pSelect = document.getElementById('partner-select');
-            if(pSelect.children.length <= 1) { // Only update if empty to avoid reset while selecting
-                 d.all_players.forEach(p => {
-                     if(p.id !== user.id) {
-                         const opt = document.createElement('option'); opt.value = p.id; opt.innerText = p.nickname;
-                         pSelect.appendChild(opt);
-                     }
-                 });
-            }
+                document.getElementById('lb-list').innerHTML = d.leaderboard.map((p,i) => `<tr><td class="font-bold text-gray-500">${i+1}</td><td><div class="flex flex-col"><div class="flex items-center gap-2"><div class="avatar"><div class="w-6 rounded-full"><img src="${p.pictureUrl}"></div></div><span class="text-sm font-bold">${p.nickname}</span></div></div></td><td class="text-right"><div class="font-mono font-bold text-indigo-600">${p.mmr}</div>${isStaff ? `<button onclick="openEditMMR('${p.id}', '${p.nickname}', ${p.mmr})" class="btn btn-xs btn-ghost text-gray-400"><i class="fa-solid fa-pen"></i></button>` : ''}</td></tr>`).join('');
+                document.getElementById('events-list').innerHTML = d.events.map(e => {
+                    return `<div class="card bg-white border border-gray-200 shadow-sm p-4"><div class="flex justify-between items-start"><div><h4 class="font-bold text-lg text-indigo-900">${e.name}</h4><div class="text-sm text-gray-500 mb-2"><i class="fa-regular fa-clock"></i> ${formatDate(e.datetime)}</div></div>${isStaff ? `<button onclick="deleteEvent('${e.id}')" class="btn btn-xs btn-circle btn-ghost text-red-400">🗑</button>` : ''}</div><button onclick="toggleEventJoin('${e.id}')" class="btn btn-sm w-full ${e.joined_users.some(u=>u.id===user.id) ? 'btn-error btn-outline' : 'btn-success text-white'}">${e.joined_users.some(u=>u.id===user.id) ? '❌ ยกเลิก' : '🙋‍♂️ ไปด้วย!'}</button></div>`;
+                }).join('');
+
+                // Update Partner Select Dropdown
+                const pSelect = document.getElementById('partner-select');
+                const manPSelects = document.querySelectorAll('.player-select');
+                
+                // Update Partner Request Dropdown (Only if empty to prevent reset)
+                if(pSelect && pSelect.children.length <= 1) {
+                     d.all_players.forEach(p => {
+                         if(p.id !== user.id) {
+                             const opt = document.createElement('option'); opt.value = p.id; opt.innerText = p.nickname;
+                             pSelect.appendChild(opt);
+                         }
+                     });
+                }
+                
+                // Update Manual Match Dropdown (Only needed when modal opens, but keeping data fresh is good)
+                // We will populate this when modal opens instead to save performance
+
+            } catch(e) { console.error("Refresh Error:", e); }
         }
 
         function updateCheckinBtn(status) {
-            const btn = document.getElementById('btn-checkin'); const badge = document.getElementById('status-badge'); const reqBox = document.getElementById('partner-req-box'); btn.disabled = false; 
+            const btn = document.getElementById('btn-checkin'); const badge = document.getElementById('status-badge'); const reqBox = document.getElementById('partner-req-box'); 
+            if(!btn) return;
+            btn.disabled = false; 
             if (status === 'active') { 
                 btn.innerText = "❌ ลงชื่อออก"; btn.className = "btn btn-outline btn-error w-full"; badge.innerText = "รอคิว"; badge.className = "badge badge-success text-white"; 
-                reqBox.classList.remove('hidden');
-            } 
-            else if (status === 'playing') { 
+                if(reqBox) reqBox.classList.remove('hidden');
+            } else if (status === 'playing') { 
                 btn.innerText = "🏸 กำลังแข่งขัน"; btn.disabled = true; btn.className = "btn btn-disabled w-full"; badge.innerText = "กำลังเล่น"; badge.className = "badge badge-warning"; 
-                reqBox.classList.add('hidden');
-            } 
-            else { 
+                if(reqBox) reqBox.classList.add('hidden');
+            } else { 
                 btn.innerText = "✅ ลงชื่อเข้าสนาม"; btn.className = "btn btn-primary w-full"; badge.innerText = "ยังไม่เข้า"; badge.className = "badge badge-ghost"; 
-                reqBox.classList.add('hidden');
+                if(reqBox) reqBox.classList.add('hidden');
             }
         }
 
-        // --- NEW FEATURES ---
-        
         async function requestPartner() {
             const targetId = document.getElementById('partner-select').value;
             if(!targetId) return;
@@ -421,11 +401,11 @@
         }
 
         function openManualMatch() {
-            // Fill players dropdown
             const selects = document.querySelectorAll('.player-select');
             selects.forEach(s => {
                 s.innerHTML = '<option value="">-- เลือก --</option>';
-                globalAllPlayers.filter(p=>p.status==='active').forEach(p => { // Show only active
+                // Show ONLY active players for manual match
+                globalAllPlayers.filter(p=>p.status==='active').forEach(p => {
                     const opt = document.createElement('option'); opt.value=p.id; opt.innerText=p.nickname;
                     s.appendChild(opt);
                 });
@@ -439,35 +419,20 @@
             const p2 = document.getElementById('man-p2').value;
             const p3 = document.getElementById('man-p3').value;
             const p4 = document.getElementById('man-p4').value;
-            
             if(!p1||!p2||!p3||!p4) return alert('เลือกผู้เล่นให้ครบ 4 คนครับ');
             if(new Set([p1,p2,p3,p4]).size !== 4) return alert('ผู้เล่นซ้ำกันครับ');
-
-            await fetch('/api/matchmake/manual', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({userId:user.id, courtId:courtId, playerIds:[p1,p2,p3,p4]})
-            });
-            document.getElementById('modal_manual_match').close();
-            refresh();
-        }
-
-        // --- EXISTING LOGIC ---
-        async function toggleSession(action) {
-            if(action === 'end' && !confirm('⚠️ ยืนยันจบก๊วน?')) return;
-            const btnStart = document.getElementById('btn-sess-start'); const btnEnd = document.getElementById('btn-sess-end');
-            if(btnStart) { btnStart.disabled=true; btnStart.innerHTML='<span class="loading loading-spinner"></span> รอแป๊บ...'; }
-            if(btnEnd) { btnEnd.disabled=true; btnEnd.innerHTML='<span class="loading loading-spinner"></span> รอแป๊บ...'; }
-            try { await fetch('/api/admin/toggle_session', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action, userId:user.id})}); document.getElementById('modal_admin').close(); alert(action==='start' ? '🚀 เริ่มก๊วนแล้ว!' : '🏁 จบก๊วนเรียบร้อย!'); refresh(); } 
-            catch(e) { alert('Error: ' + e); } finally { if(btnStart) { btnStart.disabled=false; btnStart.innerHTML='🚀 เริ่มก๊วน (Start Session)'; } if(btnEnd) { btnEnd.disabled=false; btnEnd.innerHTML='🏁 จบก๊วน (End Session)'; } }
+            await fetch('/api/matchmake/manual', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:user.id, courtId:courtId, playerIds:[p1,p2,p3,p4]})});
+            document.getElementById('modal_manual_match').close(); refresh();
         }
 
         async function openBillingModal() {
-            await refresh();
+            await refresh(); // Force data update
             const select = document.getElementById('bill-event-select');
             const now = Date.now() / 1000;
+            // Filter only past/active events within reasonable time
             const pastEvents = globalEvents.filter(e => {
                 const eTime = typeof e.datetime === 'number' ? e.datetime : new Date(e.datetime).getTime()/1000;
-                return eTime <= now + 3600;
+                return eTime <= now + 7200; // Allow slight future (2hr)
             });
             pastEvents.sort((a,b) => b.sort_key - a.sort_key);
             const targetEvents = pastEvents.slice(0, 5);
@@ -477,27 +442,40 @@
         }
 
         function loadBillPlayers() {
-            const eid = document.getElementById('bill-event-select').value; const showAll = document.getElementById('bill-show-all').checked; const evt = globalEvents.find(e => e.id === eid); const tbody = document.getElementById('bill-player-list'); const defHr = document.getElementById('bill-default-hr').value || 2;
+            const eid = document.getElementById('bill-event-select').value;
+            const showAll = document.getElementById('bill-show-all').checked;
+            const evt = globalEvents.find(e => e.id === eid);
+            const tbody = document.getElementById('bill-player-list');
+            const defHr = document.getElementById('bill-default-hr').value || 2;
             tbody.innerHTML = '';
             let candidates = [];
-            if (showAll) { candidates = window.globalAllPlayers; } 
-            else if (evt) {
-                // ✅ BILLING FIX: If status is active/playing -> ALWAYS SHOW regardless of time
+            
+            if (showAll) {
+                candidates = window.globalAllPlayers;
+            } else if (evt) {
                 let eventTimeMs = (typeof evt.datetime === 'number' ? evt.datetime * 1000 : new Date(evt.datetime).getTime());
                 const startTime = eventTimeMs - (2 * 3600 * 1000); 
                 const endTime = eventTimeMs + (6 * 3600 * 1000);
                 candidates = window.globalAllPlayers.filter(p => {
                     const lastActiveMs = p.last_active * 1000;
                     const inTime = (lastActiveMs >= startTime && lastActiveMs <= endTime);
+                    // FIXED: Also include anyone currently active, just in case
                     const isActiveNow = (p.status === 'active' || p.status === 'playing');
-                    return inTime || isActiveNow; // OR logic fix
+                    return inTime || isActiveNow;
                 });
             }
-            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบรายชื่อ (ลองกด "แสดงทั้งหมด")</td></tr>';
-            else { candidates.forEach(u => { tbody.innerHTML += `<tr class="bill-row" data-name="${u.nickname}"><td><div class="flex items-center gap-2"><img src="${u.pictureUrl}" class="w-6 h-6 rounded-full text-[10px]">${u.nickname}<button onclick="this.closest('tr').remove();calculateBill()" class="btn btn-xs btn-ghost text-red-400 rounded-full px-1">x</button></div></td><td><input type="number" class="input input-bordered input-xs w-full bill-hr" value="${defHr}" min="0" oninput="calculateBill()"></td><td><input type="number" class="input input-bordered input-xs w-full bill-min" value="0" min="0" step="5" oninput="calculateBill()"></td><td class="text-right font-bold bill-price">0</td></tr>`; }); }
+            
+            if (candidates.length === 0) tbody.innerHTML = '<tr><td colspan="4" class="text-center text-gray-400 py-4">ไม่พบรายชื่อ (ลองกด "แสดงทุกคน")</td></tr>';
+            else {
+                candidates.forEach(u => {
+                    tbody.innerHTML += `<tr class="bill-row" data-name="${u.nickname}"><td><div class="flex items-center gap-2"><img src="${u.pictureUrl}" class="w-6 h-6 rounded-full text-[10px]">${u.nickname}<button onclick="this.closest('tr').remove();calculateBill()" class="btn btn-xs btn-ghost text-red-400 rounded-full px-1">x</button></div></td><td><input type="number" class="input input-bordered input-xs w-full bill-hr" value="${defHr}" min="0" oninput="calculateBill()"></td><td><input type="number" class="input input-bordered input-xs w-full bill-min" value="0" min="0" step="5" oninput="calculateBill()"></td><td class="text-right font-bold bill-price">0</td></tr>`;
+                });
+            }
             calculateBill();
         }
 
+        // ... Existing helpers (calculateBill, copyBillSummary, resetSystem, toggleSession, etc.) ...
+        // (Include previous helper functions here unchanged for brevity, but they are essential!)
         function applyDefaultTime() { const def = document.getElementById('bill-default-hr').value; document.querySelectorAll('.bill-hr').forEach(el => el.value = def); document.querySelectorAll('.bill-min').forEach(el => el.value = 0); calculateBill(); }
         function calculateBill() {
             const totalCost = parseFloat(document.getElementById('bill-total-cost').value) || 0; const rows = document.querySelectorAll('.bill-row');
@@ -514,8 +492,8 @@
             txt += `------------------\nโอนแล้วส่งสลิปด้วยนะจ๊ะ 😘`;
             navigator.clipboard.writeText(txt).then(() => alert('คัดลอกสรุปยอดแล้ว! ไปแปะใน LINE ได้เลย'));
         }
-
         async function resetSystem() { if(!confirm('⚠️ ล้างข้อมูลทั้งหมด?')) return; if(!confirm('⛔️ ยืนยันครั้งสุดท้าย!')) return; try { await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); alert('✅ ล้างข้อมูลเรียบร้อย!'); location.reload(); } catch(e) { alert('Error: ' + e); } }
+        async function toggleSession(action) { if(action==='end' && !confirm('⚠️ ยืนยันจบก๊วน?')) return; await fetch('/api/admin/toggle_session', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action, userId:user.id})}); location.reload(); }
         async function changeCourtCount(delta) { const current = parseInt(document.getElementById('court-count-display').innerText); await fetch('/api/admin/update_courts', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:current+delta})}); refresh(); }
         async function toggleMod(tid, val) { await fetch('/api/admin/manage_mod', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requesterId:user.id, targetUserId:tid, action:val?'promote':'demote'})}); }
         async function submitRes(w) { const r = await(await fetch('/api/submit_result', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})})).json(); if(r.error) alert(r.error); document.getElementById('modal_finish').close(); refresh(); }
