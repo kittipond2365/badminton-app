@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 # --- CONFIG ---
 # ใส่ ID ของคุณปอนด์คนเดียวเท่านั้น (User ID ที่ขึ้นต้นด้วย U...)
-SUPER_ADMIN_ID = "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxx" 
+SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9" 
 
 # --- DATABASE ---
 # เก็บรายชื่อคนที่เป็น Mod (เก็บเป็น ID)
