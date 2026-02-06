@@ -52,6 +52,11 @@ load_data()
 
 # --- HELPERS ---
 def get_rank_title(mmr):
+    try:
+        mmr = int(mmr)
+    except:
+        mmr = 1000 # Fallback
+        
     if mmr <= 800: return "NOOB DOG 🐶"
     elif mmr <= 1200: return "NOOB 🐣"
     elif mmr <= 1400: return "เด็กกระโปก 👶"
@@ -59,44 +64,46 @@ def get_rank_title(mmr):
     else: return "โปรเพรเย๋อ 👽"
 
 def calculate_smart_stats(uid):
-    my_matches = [m for m in db['match_history'] if uid in m.get('team_a_ids', []) or uid in m.get('team_b_ids', [])]
-    total = len(my_matches)
-    if total == 0: return {"win_rate": 0, "total": 0, "streak": 0, "best_partner": "-", "nemesis": "-"}
-    wins = 0; current_streak = 0; max_streak = 0
-    partners = {}; opponents = {}
-    for m in reversed(my_matches):
-        team_a_ids = m.get('team_a_ids', [])
-        team_b_ids = m.get('team_b_ids', [])
-        is_team_a = uid in team_a_ids
-        my_team = 'A' if is_team_a else 'B'
-        is_winner = (m.get('winner_team') == my_team)
-        if is_winner: wins += 1; current_streak += 1
-        else: current_streak = 0
-        if current_streak > max_streak: max_streak = current_streak
-        my_ids = team_a_ids if is_team_a else team_b_ids
-        my_names = m.get('team_a', []) if is_team_a else m.get('team_b', [])
-        for pid, pname in zip(my_ids, my_names):
-            if pid != uid:
-                if pid not in partners: partners[pid] = {'played':0, 'won':0, 'name':pname}
-                partners[pid]['played'] += 1
-                if is_winner: partners[pid]['won'] += 1
-        opp_ids = team_b_ids if is_team_a else team_a_ids
-        opp_names = m.get('team_b', []) if is_team_a else m.get('team_a', [])
-        for pid, pname in zip(opp_ids, opp_names):
-            if pid not in opponents: opponents[pid] = {'played':0, 'lost':0, 'name':pname}
-            opponents[pid]['played'] += 1
-            if not is_winner: opponents[pid]['lost'] += 1
-    best_partner, best_wr = "-", -1
-    for pid, d in partners.items():
-        if d['played'] >= 2:
-            wr = (d['won']/d['played'])*100
-            if wr > best_wr: best_wr=wr; best_partner=f"{d['name']} ({int(wr)}%)"
-    nemesis, worst_wr = "-", -1
-    for pid, d in opponents.items():
-        if d['played'] >= 2:
-            lr = (d['lost']/d['played'])*100
-            if lr > worst_wr: worst_wr=lr; nemesis=f"{d['name']} (แพ้ {int(lr)}%)"
-    return {"win_rate": int((wins/total)*100), "total": total, "streak": max_streak, "best_partner": best_partner, "nemesis": nemesis}
+    try:
+        my_matches = [m for m in db['match_history'] if uid in m.get('team_a_ids', []) or uid in m.get('team_b_ids', [])]
+        total = len(my_matches)
+        if total == 0: return {"win_rate": 0, "total": 0, "streak": 0, "best_partner": "-", "nemesis": "-"}
+        wins = 0; current_streak = 0; max_streak = 0; partners = {}; opponents = {}
+        for m in reversed(my_matches):
+            team_a_ids = m.get('team_a_ids', [])
+            team_b_ids = m.get('team_b_ids', [])
+            is_team_a = uid in team_a_ids
+            my_team = 'A' if is_team_a else 'B'
+            is_winner = (m.get('winner_team') == my_team)
+            if is_winner: wins += 1; current_streak += 1
+            else: current_streak = 0
+            if current_streak > max_streak: max_streak = current_streak
+            my_ids = team_a_ids if is_team_a else team_b_ids
+            my_names = m.get('team_a', []) if is_team_a else m.get('team_b', [])
+            for pid, pname in zip(my_ids, my_names):
+                if pid != uid:
+                    if pid not in partners: partners[pid] = {'played':0, 'won':0, 'name':pname}
+                    partners[pid]['played'] += 1
+                    if is_winner: partners[pid]['won'] += 1
+            opp_ids = team_b_ids if is_team_a else team_a_ids
+            opp_names = m.get('team_b', []) if is_team_a else m.get('team_a', [])
+            for pid, pname in zip(opp_ids, opp_names):
+                if pid not in opponents: opponents[pid] = {'played':0, 'lost':0, 'name':pname}
+                opponents[pid]['played'] += 1
+                if not is_winner: opponents[pid]['lost'] += 1
+        best_partner, best_wr = "-", -1
+        for pid, d in partners.items():
+            if d['played'] >= 2:
+                wr = (d['won']/d['played'])*100
+                if wr > best_wr: best_wr=wr; best_partner=f"{d['name']} ({int(wr)}%)"
+        nemesis, worst_wr = "-", -1
+        for pid, d in opponents.items():
+            if d['played'] >= 2:
+                lr = (d['lost']/d['played'])*100
+                if lr > worst_wr: worst_wr=lr; nemesis=f"{d['name']} (แพ้ {int(lr)}%)"
+        return {"win_rate": int((wins/total)*100), "total": total, "streak": max_streak, "best_partner": best_partner, "nemesis": nemesis}
+    except:
+        return {"win_rate": 0, "total": 0, "streak": 0, "best_partner": "-", "nemesis": "-"}
 
 # --- ROUTES ---
 @app.route('/')
@@ -112,6 +119,7 @@ def login():
     p = db['players'][uid]
     p['pictureUrl'] = d.get('pictureUrl')
     p['role'] = 'super' if uid == SUPER_ADMIN_ID else ('mod' if uid in db['mod_ids'] else 'user')
+    p['mmr'] = p.get('mmr', 1000) # Safety
     p['rank_title'] = get_rank_title(p['mmr'])
     p['stats'] = calculate_smart_stats(uid)
     my_history = [m for m in db['match_history'] if uid in m.get('team_a_ids', []) or uid in m.get('team_b_ids', [])]
@@ -120,63 +128,72 @@ def login():
 
 @app.route('/api/get_dashboard')
 def get_dashboard():
-    c_data = {}
-    for cid, m in active_courts.items():
-        if m: 
-            m['elapsed'] = int(time.time() - m['start_time'])
-            m['team_a_data'] = []
-            for uid in m['team_a_ids']:
-                if uid in db['players']: m['team_a_data'].append({"name": db['players'][uid]['nickname'], "pic": db['players'][uid]['pictureUrl']})
-            m['team_b_data'] = []
-            for uid in m['team_b_ids']:
-                if uid in db['players']: m['team_b_data'].append({"name": db['players'][uid]['nickname'], "pic": db['players'][uid]['pictureUrl']})
-        c_data[cid] = m
+    try:
+        # Courts
+        c_data = {}
+        for cid, m in active_courts.items():
+            if m: 
+                m['elapsed'] = int(time.time() - m['start_time'])
+                m['team_a_data'] = []
+                for uid in m.get('team_a_ids', []):
+                    if uid in db['players']: m['team_a_data'].append({"name": db['players'][uid]['nickname'], "pic": db['players'][uid].get('pictureUrl','')})
+                m['team_b_data'] = []
+                for uid in m.get('team_b_ids', []):
+                    if uid in db['players']: m['team_b_data'].append({"name": db['players'][uid]['nickname'], "pic": db['players'][uid].get('pictureUrl','')})
+            c_data[cid] = m
 
-    active = [p for p in db['players'].values() if p['status'] in ['active','playing']]
-    active.sort(key=lambda x: x.get('last_active', 0))
+        # Queue (Safe Sort)
+        active = [p for p in db['players'].values() if p.get('status') in ['active','playing']]
+        active.sort(key=lambda x: float(x.get('last_active', 0)))
 
-    lb = sorted(db['players'].values(), key=lambda x: x['mmr'], reverse=True)
-    for p in lb: p['rank_title'] = get_rank_title(p['mmr'])
-    
-    event_list = []
-    for eid, e in db['events'].items():
-        joined_users = []
-        for pid in e.get('players', []):
-            if pid in db['players']:
-                joined_users.append({"id":pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid]['pictureUrl']})
-        e['joined_users'] = joined_users
-        raw_dt = e.get('datetime', 0)
-        if isinstance(raw_dt, str):
-            try: e['sort_key'] = datetime.fromisoformat(raw_dt).timestamp()
-            except: e['sort_key'] = 0
-        else: e['sort_key'] = raw_dt
-        event_list.append(e)
-    event_list.sort(key=lambda x: x['sort_key'])
+        # Leaderboard (Safe Sort)
+        lb = sorted(db['players'].values(), key=lambda x: x.get('mmr', 1000), reverse=True)
+        for p in lb: p['rank_title'] = get_rank_title(p.get('mmr', 1000))
+        
+        # Events (Safe Sort)
+        event_list = []
+        for eid, e in db['events'].items():
+            joined_users = []
+            for pid in e.get('players', []):
+                if pid in db['players']:
+                    joined_users.append({"id":pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid].get('pictureUrl','')})
+            e['joined_users'] = joined_users
+            
+            raw_dt = e.get('datetime', 0)
+            if isinstance(raw_dt, str):
+                try: e['sort_key'] = datetime.fromisoformat(raw_dt).timestamp()
+                except: e['sort_key'] = 0
+            else: e['sort_key'] = raw_dt
+            event_list.append(e)
+        event_list.sort(key=lambda x: x.get('sort_key', 0))
 
-    all_players_data = []
-    for p in db['players'].values():
-        la = p.get('last_active', 0)
-        try: la = float(la)
-        except: la = 0
-        all_players_data.append({
-            "id": p['id'], "nickname": p['nickname'], "pictureUrl": p.get('pictureUrl', ''), 
-            "status": p.get('status', 'offline'), "last_active": la, 
-            "is_mod": p['id'] in db['mod_ids'], "partner_req": p.get('partner_req')
+        # All Players (Safe Float Conversion)
+        all_players_data = []
+        for p in db['players'].values():
+            try: la = float(p.get('last_active', 0))
+            except: la = 0
+            all_players_data.append({
+                "id": p['id'], "nickname": p['nickname'], "pictureUrl": p.get('pictureUrl', ''), 
+                "status": p.get('status', 'offline'), "last_active": la, 
+                "is_mod": p['id'] in db['mod_ids'], "partner_req": p.get('partner_req')
+            })
+
+        return jsonify({
+            "system": db['system_settings'], "courts": c_data, "queue": active, "queue_count": len(active),
+            "events": event_list, "leaderboard": lb, "match_history": db['match_history'][:20], "all_players": all_players_data
         })
-
-    return jsonify({
-        "system": db['system_settings'], "courts": c_data, "queue": active, "queue_count": len(active),
-        "events": event_list, "leaderboard": lb, "match_history": db['match_history'][:20], "all_players": all_players_data
-    })
+    except Exception as e:
+        print(f"ERROR in get_dashboard: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/toggle_status', methods=['POST'])
 def toggle_status():
     uid = request.json.get('userId')
     if uid in db['players']:
-        curr = db['players'][uid]['status']
+        curr = db['players'][uid].get('status', 'offline')
         if curr in ['active','playing']: 
             db['players'][uid]['status'] = 'offline'
-            db['players'][uid]['partner_req'] = None # ออกสนามแล้วยกเลิกคู่ด้วย
+            db['players'][uid]['partner_req'] = None
         else: 
             db['players'][uid]['status'] = 'active'
             db['players'][uid]['last_active'] = time.time()
@@ -187,9 +204,8 @@ def toggle_status():
 def request_partner():
     d = request.json; uid = d['userId']; target = d['targetId']
     if uid in db['players']:
-        if db['players'][uid]['status'] != 'active': return jsonify({"error": "ต้อง Check-in ก่อนนะครับ"})
-        if target not in db['players'] or db['players'][target]['status'] != 'active': return jsonify({"error": "เพื่อนยังไม่ Check-in"})
-        
+        if db['players'][uid].get('status') != 'active': return jsonify({"error": "ต้อง Check-in ก่อนนะครับ"})
+        if target not in db['players'] or db['players'][target].get('status') != 'active': return jsonify({"error": "เพื่อนยังไม่ Check-in"})
         db['players'][uid]['partner_req'] = target
         save_data()
         return jsonify({"success":True})
@@ -204,106 +220,50 @@ def cancel_request():
         return jsonify({"success":True})
     return jsonify({"error":"User not found"})
 
-# --- GAMEPLAY & MATCHMAKING (CORE LOGIC) ---
-
 @app.route('/api/matchmake', methods=['POST'])
 def matchmake():
     free = next((k for k,v in active_courts.items() if v is None), None)
     if not free: return jsonify({"status":"full"})
+    active_players = [p for p in db['players'].values() if p.get('status')=='active']
     
-    # 1. Get Active Players
-    active_players = [p for p in db['players'].values() if p['status']=='active']
-    
-    # 2. Group Players (Singles vs Pairs)
-    groups = []
-    processed_ids = set()
-    
+    groups = []; processed_ids = set()
     for p in active_players:
         if p['id'] in processed_ids: continue
-        
-        # Check Partner Request
         partner_id = p.get('partner_req')
         partner = db['players'].get(partner_id) if partner_id else None
-        
-        # Valid Pair? (Both active, Partner exists)
-        if partner and partner['status'] == 'active' and partner['id'] not in processed_ids:
-            # 🟢 PAIR FOUND
-            # Queue Time = MAX(p1.time, p2.time) -> เอาเวลาคนที่ราช้าสุดเป็นเกณฑ์ (กันแซง)
-            queue_time = max(p.get('last_active',0), partner.get('last_active',0))
-            groups.append({
-                "type": "pair",
-                "members": [p, partner],
-                "queue_time": queue_time
-            })
-            processed_ids.add(p['id'])
-            processed_ids.add(partner['id'])
+        if partner and partner.get('status') == 'active' and partner['id'] not in processed_ids:
+            queue_time = max(float(p.get('last_active',0)), float(partner.get('last_active',0)))
+            groups.append({"type": "pair", "members": [p, partner], "queue_time": queue_time})
+            processed_ids.add(p['id']); processed_ids.add(partner['id'])
         else:
-            # 🟡 SINGLE
-            groups.append({
-                "type": "single",
-                "members": [p],
-                "queue_time": p.get('last_active',0)
-            })
+            groups.append({"type": "single", "members": [p], "queue_time": float(p.get('last_active',0))})
             processed_ids.add(p['id'])
             
-    # 3. Sort Groups by Queue Time (Oldest first)
     groups.sort(key=lambda x: x['queue_time'])
-    
-    # 4. Select top groups to fill 4 slots
     selected_players = []
-    
     for g in groups:
         if len(selected_players) + len(g['members']) <= 4:
             selected_players.extend(g['members'])
-            
         if len(selected_players) == 4: break
-        
     if len(selected_players) < 4: return jsonify({"status":"waiting"})
     
-    # 5. Form Teams (Keep pairs together)
-    # Check if any pairs in selection
-    team_a = []
-    team_b = []
-    
-    # Helper to check if two users requested each other (or one way)
-    def are_pair(u1, u2):
-        return u1['partner_req'] == u2['id'] or u2['partner_req'] == u1['id']
-
+    team_a = []; team_b = []
+    def are_pair(u1, u2): return u1.get('partner_req') == u2['id'] or u2.get('partner_req') == u1['id']
     remaining = selected_players.copy()
-    
-    # Try to extract a pair for Team A
     pair_found = False
     for i in range(len(remaining)):
         for j in range(i+1, len(remaining)):
             if are_pair(remaining[i], remaining[j]):
-                team_a = [remaining[i], remaining[j]]
-                remaining.pop(j)
-                remaining.pop(i)
-                pair_found = True
-                break
+                team_a = [remaining[i], remaining[j]]; remaining.pop(j); remaining.pop(i); pair_found = True; break
         if pair_found: break
-        
-    if not team_a: # No explicit pair, take top 2 by MMR (or just random)
-        remaining.sort(key=lambda x: x['mmr']) # Balance MMR later, simple logic now
+    if not team_a: 
+        remaining.sort(key=lambda x: x.get('mmr', 1000))
         team_a = [remaining.pop(0), remaining.pop(0)]
-        
-    team_b = remaining # The rest go to Team B
+    team_b = remaining
     
-    # Save Match
-    match = {
-        "team_a": [p['nickname'] for p in team_a],
-        "team_a_ids": [p['id'] for p in team_a],
-        "team_b": [p['nickname'] for p in team_b],
-        "team_b_ids": [p['id'] for p in team_b],
-        "start_time": time.time()
-    }
+    match = {"team_a": [p['nickname'] for p in team_a], "team_a_ids": [p['id'] for p in team_a], "team_b": [p['nickname'] for p in team_b], "team_b_ids": [p['id'] for p in team_b], "start_time": time.time()}
     active_courts[free] = match
-    
-    # Update Status
-    for p in selected_players:
-        db['players'][p['id']]['status'] = 'playing'
-        # Do not clear partner_req yet (maybe they want to play again?) - Standard is keep it until cancel or logout
-        
+    for p in selected_players: db['players'][p['id']]['status'] = 'playing'
     save_data()
     return jsonify({"status":"matched"})
 
@@ -319,14 +279,13 @@ def submit_result():
     mmr_snapshot = {}
     win_ids = m['team_a_ids'] if winner=='A' else m['team_b_ids']
     lose_ids = m['team_b_ids'] if winner=='A' else m['team_a_ids']
-    
     for uid in win_ids:
-        old = db['players'][uid]['mmr']; new = old + 25
-        db['players'][uid]['mmr'] = new; db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
+        old = db['players'][uid].get('mmr', 1000); new = old + 25
+        db['players'][uid]['mmr'] = new; db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time(); db['players'][uid]['partner_req'] = None
         mmr_snapshot[uid] = {"old": old, "new": new, "change": "+25"}
     for uid in lose_ids:
-        old = db['players'][uid]['mmr']; new = old - 20
-        db['players'][uid]['mmr'] = new; db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time()
+        old = db['players'][uid].get('mmr', 1000); new = old - 20
+        db['players'][uid]['mmr'] = new; db['players'][uid]['status'] = 'active'; db['players'][uid]['last_active'] = time.time(); db['players'][uid]['partner_req'] = None
         mmr_snapshot[uid] = {"old": old, "new": new, "change": "-20"}
 
     hist = {"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "team_a": m['team_a'], "team_a_ids": m['team_a_ids'], "team_b": m['team_b'], "team_b_ids": m['team_b_ids'], "winner_team": winner, "mmr_snapshot": mmr_snapshot}
@@ -344,11 +303,11 @@ def manual_matchmake():
     if len(players) != 4: return jsonify({"error": "Need 4 valid players"})
     match = {"team_a": [players[0]['nickname'], players[1]['nickname']], "team_a_ids": [players[0]['id'], players[1]['id']], "team_b": [players[2]['nickname'], players[3]['nickname']], "team_b_ids": [players[2]['id'], players[3]['id']], "start_time": time.time()}
     active_courts[court_id] = match
-    for p in players: db['players'][p['id']]['status'] = 'playing'
+    for p in players: db['players'][p['id']]['status'] = 'playing'; db['players'][p['id']]['partner_req'] = None
     save_data()
     return jsonify({"success":True})
 
-# ... (Admin / Event / Reset routes same as before) ...
+# ... Admin & Event routes (Same logic, verified safe) ...
 @app.route('/api/admin/toggle_session', methods=['POST'])
 def toggle_session():
     d=request.json; uid=d.get('userId'); action=d.get('action')
@@ -360,41 +319,30 @@ def toggle_session():
             db['events'][eid] = {"id":eid, "name": f"ก๊วน {today}", "datetime": time.time(), "players":[], "status":"active"}
             db['system_settings']['current_event_id'] = eid
     else:
-        db['system_settings']['is_session_active'] = False
-        db['system_settings']['current_event_id'] = None
+        db['system_settings']['is_session_active'] = False; db['system_settings']['current_event_id'] = None
         for p in db['players'].values(): 
-            if p['status']!='offline': p['status']='offline'; p['partner_req']=None
-    save_data()
-    return jsonify({"success":True})
+            if p.get('status')!='offline': p['status']='offline'; p['partner_req']=None
+    save_data(); return jsonify({"success":True})
 
 @app.route('/api/admin/update_courts', methods=['POST'])
-def update_courts():
-    count = int(request.json.get('count', 2)); db['system_settings']['total_courts'] = count; save_data(); refresh_courts()
-    return jsonify({"success":True})
-
+def update_courts(): count = int(request.json.get('count', 2)); db['system_settings']['total_courts'] = count; save_data(); refresh_courts(); return jsonify({"success":True})
 @app.route('/api/admin/manage_mod', methods=['POST'])
-def manage_mod():
-    d=request.json; requester=d.get('requesterId'); target_id=d.get('targetUserId'); action=d.get('action')
+def manage_mod(): d=request.json; requester=d.get('requesterId'); target_id=d.get('targetUserId'); action=d.get('action'); 
     if requester != SUPER_ADMIN_ID: return jsonify({"error": "Super Admin Only"}), 403
     if action == 'promote': 
         if target_id not in db['mod_ids']: db['mod_ids'].append(target_id)
-    else:
+    else: 
         if target_id in db['mod_ids']: db['mod_ids'].remove(target_id)
-    save_data()
-    return jsonify({"success":True})
-
+    save_data(); return jsonify({"success":True})
 @app.route('/api/admin/reset_system', methods=['POST'])
-def reset_system():
-    d=request.json; uid=d.get('userId')
+def reset_system(): d=request.json; uid=d.get('userId'); 
     if uid != SUPER_ADMIN_ID: return jsonify({"error": "Super Admin Only"}), 403
     db['match_history'] = []; db['billing_history'] = []; db['events'] = {}
     for pid in db['players']: db['players'][pid]['mmr'] = 1000; db['players'][pid]['status'] = 'offline'; db['players'][pid]['partner_req'] = None
     global active_courts; 
     for cid in active_courts: active_courts[cid] = None
     db['system_settings']['is_session_active'] = False; db['system_settings']['current_event_id'] = None
-    save_data()
-    return jsonify({"success":True})
-
+    save_data(); return jsonify({"success":True})
 @app.route('/api/event/create', methods=['POST'])
 def create_event(): d=request.json; eid=str(uuid.uuid4())[:8]; db['events'][eid]={"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}; save_data(); return jsonify({"success":True})
 @app.route('/api/event/delete', methods=['POST'])
