@@ -121,6 +121,10 @@
             <div id="super-admin-section" class="mb-4 hidden">
                 <h4 class="font-bold text-sm mb-2 text-indigo-600"><i class="fa-solid fa-crown"></i> แต่งตั้ง Moderator</h4>
                 <div class="h-48 overflow-y-auto border rounded p-2 bg-white"><table class="table table-xs"><thead><tr><th>ชื่อ</th><th class="text-right">Mod</th></tr></thead><tbody id="admin-user-list"></tbody></table></div>
+                <div class="mt-4 pt-4 border-t">
+                    <h4 class="font-bold text-sm mb-2 text-red-600">⚠️ Danger Zone</h4>
+                    <button onclick="resetSystem()" class="btn btn-outline btn-error btn-sm w-full"><i class="fa-solid fa-bomb"></i> ล้างข้อมูลทั้งหมด (Factory Reset)</button>
+                </div>
             </div>
             <div class="modal-action"><form method="dialog"><button class="btn">ปิด</button></form></div>
         </div>
@@ -199,14 +203,12 @@
             document.getElementById('my-img').src = user.pictureUrl;
             document.getElementById('my-mmr').innerText = user.mmr;
             document.getElementById('my-rank-text').innerText = user.rank_title;
-            
             const s = user.stats;
             document.getElementById('st-wr').innerText = s.win_rate + "%";
             document.getElementById('st-total').innerText = s.total;
             document.getElementById('st-streak').innerText = s.streak;
             document.getElementById('st-partner').innerText = s.best_partner;
             document.getElementById('st-nemesis').innerText = s.nemesis;
-
             const isStaff = (user.role === 'super' || user.role === 'mod');
             if(isStaff) {
                 document.getElementById('btn-admin').classList.remove('hidden');
@@ -305,7 +307,7 @@
             catch(e) { alert('Error: ' + e); } finally { if(btnStart) { btnStart.disabled=false; btnStart.innerHTML='🚀 เริ่มก๊วน (Start Session)'; } if(btnEnd) { btnEnd.disabled=false; btnEnd.innerHTML='🏁 จบก๊วน (End Session)'; } }
         }
 
-        // ✅ NEW: BILLING LOGIC - ALWAYS USE ACTIVE USERS
+        // ✅ FIXED BILLING LOGIC: ONLY ACTIVE USERS
         function openBillingModal() {
             const select = document.getElementById('bill-event-select'); select.innerHTML = '<option disabled selected>-- เลือกวันที่ --</option>';
             globalEvents.forEach(e => { const opt = document.createElement('option'); opt.value = e.id; opt.innerText = `${e.name} (${formatDate(e.datetime)})`; select.appendChild(opt); });
@@ -320,17 +322,14 @@
             tbody.innerHTML = '';
             if (!evt) return;
 
-            // กรองคนที่มีความเคลื่อนไหวในช่วงเวลานั้น (ไม่สน Event Join List)
-            const eventTime = new Date(evt.datetime).getTime();
-            const bufferWindow = 4 * 60 * 60 * 1000; // 4 ชั่วโมง (เผื่อคนมาก่อน/กลับทีหลัง)
+            // 🟢 FORCE: ดึงจากคนที่มีความเคลื่อนไหวเท่านั้น (ไม่เอา Join list)
+            const eventTime = typeof evt.datetime === 'number' ? evt.datetime * 1000 : new Date(evt.datetime).getTime();
+            const bufferWindow = 4 * 60 * 60 * 1000; // 4 ชั่วโมง
             
             const candidates = window.globalAllPlayers.filter(p => {
-                // 1. คนที่กำลัง Active อยู่ตอนนี้ (กรณีคิดเงินสดๆ หน้างาน)
                 const isOnline = p.status === 'active' || p.status === 'playing';
-                // 2. หรือ คนที่เคย Active ในช่วงเวลา Event นั้น (กรณีคิดย้อนหลังนิดหน่อย)
                 const lastActiveMs = p.last_active * 1000;
                 const wasAround = Math.abs(eventTime - lastActiveMs) < bufferWindow;
-                
                 return isOnline || wasAround;
             });
 
@@ -365,17 +364,36 @@
             navigator.clipboard.writeText(txt).then(() => alert('คัดลอกสรุปยอดแล้ว! ไปแปะใน LINE ได้เลย'));
         }
 
+        // --- RESET SYSTEM ---
+        async function resetSystem() {
+            if(!confirm('⚠️ คุณแน่ใจนะว่าจะ "ล้างข้อมูลทั้งหมด"?')) return;
+            if(!confirm('⛔️ ยืนยันครั้งสุดท้าย! ข้อมูล Match History, Billing, MMR จะหายหมดและกู้คืนไม่ได้!')) return;
+            try { const res = await fetch('/api/admin/reset_system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userId: user.id})}); const r = await res.json();
+            if(r.error) alert(r.error); else { alert('✅ ล้างข้อมูลเรียบร้อย! เริ่มต้นใหม่ได้เลย'); location.reload(); } } catch(e) { alert('Error: ' + e); }
+        }
+
         async function changeCourtCount(delta) { const current = parseInt(document.getElementById('court-count-display').innerText); await fetch('/api/admin/update_courts', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({count:current+delta})}); refresh(); }
         async function toggleMod(tid, val) { await fetch('/api/admin/manage_mod', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requesterId:user.id, targetUserId:tid, action:val?'promote':'demote'})}); }
         async function submitRes(w) { const r = await(await fetch('/api/submit_result', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})})).json(); if(r.error) alert(r.error); document.getElementById('modal_finish').close(); refresh(); }
         async function toggleStatus() { await fetch('/api/toggle_status', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:user.id})}); apiLogin(user.id, user.nickname, user.pictureUrl); }
         async function matchmake() { const r=await(await fetch('/api/matchmake',{method:'POST'})).json(); if(r.status!=='matched') alert(r.status==='full'?'เต็ม':'คนไม่พอ'); else refresh(); }
-        async function submitNewEvent() { const n=document.getElementById('evt-name').value, t=document.getElementById('evt-time').value; if(!n||!t) return; await fetch('/api/event/create', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n, datetime:t})}); document.getElementById('evt-name').value=''; document.getElementById('evt-time').value=''; refresh(); }
+        async function submitNewEvent() { 
+            const n=document.getElementById('evt-name').value, t=document.getElementById('evt-time').value; 
+            if(!n||!t) return; 
+            // Convert user input (local string) to timestamp for consistent comparison
+            const timestamp = new Date(t).getTime() / 1000;
+            await fetch('/api/event/create', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n, datetime:timestamp})}); 
+            document.getElementById('evt-name').value=''; document.getElementById('evt-time').value=''; refresh(); 
+        }
         async function deleteEvent(eid) { if(confirm('ลบนะ?')) await fetch('/api/event/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid})}); refresh(); }
         async function toggleEventJoin(eid) { await fetch('/api/event/join_toggle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:eid, userId:user.id})}); refresh(); }
         function openEditMMR(uid, n, m) { editTargetId=uid; document.getElementById('edit-target-name').innerText=`แก้ไขคะแนนของ: ${n}`; document.getElementById('edit-new-mmr').value=m; document.getElementById('modal_edit_mmr').showModal(); }
         async function saveMMR() { const v=document.getElementById('edit-new-mmr').value; if(!v) return; await fetch('/api/admin/set_mmr', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUserId:editTargetId, newMmr:v})}); document.getElementById('modal_edit_mmr').close(); refresh(); }
-        function formatDate(dt) { return new Date(dt).toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); }
+        function formatDate(dt) { 
+            // Handle both timestamp (number) and ISO string (string)
+            const dateObj = typeof dt === 'number' ? new Date(dt * 1000) : new Date(dt);
+            return dateObj.toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}); 
+        }
 
         main();
     </script>

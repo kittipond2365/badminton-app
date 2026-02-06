@@ -13,16 +13,8 @@ DATA_FILE = "/var/data/izesquad_data.json"
 
 # --- DATABASE ---
 default_db = {
-    "system_settings": {
-        "total_courts": 2,
-        "is_session_active": False,
-        "current_event_id": None
-    },
-    "mod_ids": [],
-    "players": {},
-    "events": {},
-    "match_history": [],
-    "billing_history": []
+    "system_settings": {"total_courts": 2, "is_session_active": False, "current_event_id": None},
+    "mod_ids": [], "players": {}, "events": {}, "match_history": [], "billing_history": []
 }
 active_courts = {} 
 
@@ -39,9 +31,7 @@ def load_data():
                 for k in default_db:
                     if k not in db: db[k] = default_db[k]
                 if "system_settings" not in db: db["system_settings"] = default_db["system_settings"]
-        except: 
-            db = default_db.copy()
-            save_data()
+        except: db = default_db.copy(); save_data()
     refresh_courts()
 
 def save_data():
@@ -126,12 +116,10 @@ def login():
 
 @app.route('/api/get_dashboard')
 def get_dashboard():
-    # Courts with Player Pics
     c_data = {}
     for cid, m in active_courts.items():
         if m: 
             m['elapsed'] = int(time.time() - m['start_time'])
-            # ✅ Populate Player Objects for Frontend (Name + Pic)
             m['team_a_data'] = []
             for uid in m['team_a_ids']:
                 if uid in db['players']: m['team_a_data'].append({"name": db['players'][uid]['nickname'], "pic": db['players'][uid]['pictureUrl']})
@@ -154,9 +142,9 @@ def get_dashboard():
                 joined_users.append({"id":pid, "nickname": db['players'][pid]['nickname'], "pictureUrl": db['players'][pid]['pictureUrl']})
         e['joined_users'] = joined_users
         event_list.append(e)
+    # Sort by timestamp
     event_list.sort(key=lambda x: x['datetime'])
 
-    # All Players for Billing & Mod
     all_players_data = [{"id": p['id'], "nickname": p['nickname'], "pictureUrl": p.get('pictureUrl', ''), "status": p.get('status', 'offline'), "last_active": p.get('last_active', 0), "is_mod": p['id'] in db['mod_ids']} for p in db['players'].values()]
 
     return jsonify({
@@ -188,7 +176,8 @@ def toggle_session():
         db['system_settings']['is_session_active'] = True
         if not db['system_settings'].get('current_event_id'):
             eid = str(uuid.uuid4())[:8]; today = datetime.now().strftime("%d/%m/%Y")
-            db['events'][eid] = {"id":eid, "name": f"ก๊วน {today}", "datetime": datetime.now().isoformat(), "players":[], "status":"active"}
+            # ✅ แก้ตรงนี้: ใช้ time.time() แทน isoformat()
+            db['events'][eid] = {"id":eid, "name": f"ก๊วน {today}", "datetime": time.time(), "players":[], "status":"active"}
             db['system_settings']['current_event_id'] = eid
     else:
         db['system_settings']['is_session_active'] = False
@@ -213,6 +202,18 @@ def manage_mod():
         if target_id not in db['mod_ids']: db['mod_ids'].append(target_id)
     else:
         if target_id in db['mod_ids']: db['mod_ids'].remove(target_id)
+    save_data()
+    return jsonify({"success":True})
+
+@app.route('/api/admin/reset_system', methods=['POST'])
+def reset_system():
+    d=request.json; uid=d.get('userId')
+    if uid != SUPER_ADMIN_ID: return jsonify({"error": "Super Admin Only"}), 403
+    db['match_history'] = []; db['billing_history'] = []; db['events'] = {}
+    for pid in db['players']: db['players'][pid]['mmr'] = 1000; db['players'][pid]['status'] = 'offline'
+    global active_courts; 
+    for cid in active_courts: active_courts[cid] = None
+    db['system_settings']['is_session_active'] = False; db['system_settings']['current_event_id'] = None
     save_data()
     return jsonify({"success":True})
 
@@ -247,7 +248,13 @@ def matchmake():
     return jsonify({"status":"matched"})
 
 @app.route('/api/event/create', methods=['POST'])
-def create_event(): d=request.json; eid=str(uuid.uuid4())[:8]; db['events'][eid]={"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}; save_data(); return jsonify({"success":True})
+def create_event(): 
+    d=request.json; eid=str(uuid.uuid4())[:8]
+    # ✅ แก้ตรงนี้: รับ timestamp โดยตรงจาก frontend
+    db['events'][eid]={"id":eid, "name":d['name'], "datetime":d['datetime'], "players":[], "status":"open"}
+    save_data()
+    return jsonify({"success":True})
+
 @app.route('/api/event/delete', methods=['POST'])
 def delete_event(): eid=request.json.get('eventId'); del db['events'][eid]; save_data(); return jsonify({"success":True})
 @app.route('/api/event/join_toggle', methods=['POST'])
