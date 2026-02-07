@@ -16,7 +16,7 @@ app = Flask(__name__)
 SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9"
 
 # Use Render Disk via env var (recommended)
-DATA_FILE = os.environ.get("IZESQUAD_DATA_FILE", "/tmp/izesquad_data.json")
+DATA_FILE = os.environ.get("IZESQUAD_DATA_FILE", "/var/data/izesquad_data.json")
 
 DB_LOCK = threading.Lock()
 
@@ -1548,6 +1548,44 @@ def event_delete():
     if db["system_settings"].get("current_event_id") == eid and db["system_settings"].get("is_session_active"):
         return jsonify({"error":"Can't delete active session event"}), 400
     db["events"].pop(eid, None)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/event/join", methods=["POST"])
+def event_join():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    eid = d.get("eventId")
+    if not uid or not eid:
+        return jsonify({"error": "missing data"}), 400
+    if uid not in db["players"]:
+        return jsonify({"error": "user not found"}), 404
+    if eid not in db["events"]:
+        return jsonify({"error": "event not found"}), 404
+
+    evt = db["events"][eid]
+    parts = evt.setdefault("participants", [])
+    if uid not in parts:
+        parts.append(uid)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/event/leave", methods=["POST"])
+def event_leave():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    eid = d.get("eventId")
+    if not uid or not eid:
+        return jsonify({"error": "missing data"}), 400
+    if eid not in db["events"]:
+        return jsonify({"error": "event not found"}), 404
+
+    evt = db["events"][eid]
+    parts = evt.get("participants", [])
+    if uid in parts:
+        parts.remove(uid)
     save_db(db)
     return jsonify({"success": True})
 

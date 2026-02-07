@@ -1035,8 +1035,18 @@
         body: JSON.stringify({userId:user.id, action, points, bo, notify})
       })).json();
 
-      if(r.error) alert(r.error);
-      else toast(action === "start" ? "เริ่มก๊วนแล้ว!" : "จบก๊วนแล้ว!");
+      if(r.error) return alert(r.error);
+
+      // Close admin panel
+      document.getElementById('modal_admin').close();
+
+      // Show prominent notification
+      if(action === "start"){
+        toast("🚀 เริ่มก๊วนแล้ว! เช็คอินได้เลย");
+      } else {
+        toast("🏁 จบก๊วนแล้ว! ขอบคุณทุกคน");
+      }
+
       await refresh();
     }
 
@@ -1191,6 +1201,19 @@
         const pCount = (e.participants_public||[]).length;
         const status = e.status || "open";
         const statusColor = status === "active" ? "badge-success" : (status === "ended" ? "badge-ghost" : "badge-info");
+
+        // Check if current user already joined
+        const myParts = (e.participants||[]);
+        const iJoined = myParts.includes(user.id);
+
+        // Join/Leave button (only for open or active events)
+        const canJoin = (status === "open" || status === "active");
+        const joinBtn = canJoin
+          ? (iJoined
+            ? `<button class="btn btn-xs btn-outline btn-error" onclick="leaveEvent('${e.id}')"><i class="fa-solid fa-right-from-bracket mr-1"></i>ยกเลิก</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="joinEvent('${e.id}')"><i class="fa-solid fa-right-to-bracket mr-1"></i>เข้าร่วม</button>`)
+          : '';
+
         return `
           <div class="bg-white border rounded p-3 shadow-sm">
             <div class="flex justify-between items-start">
@@ -1198,16 +1221,18 @@
                 <div class="font-black text-gray-800">${e.name}</div>
                 <div class="text-xs text-gray-500">${formatDate(e.datetime)} · <span class="badge badge-xs ${statusColor}">${status.toUpperCase()}</span> · คน: ${pCount}</div>
               </div>
-              ${canDel ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')"><i class="fa-solid fa-trash"></i></button>` : ``}
+              <div class="flex items-center gap-1">
+                ${joinBtn}
+                ${canDel ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')"><i class="fa-solid fa-trash"></i></button>` : ``}
+              </div>
             </div>
             <div class="mt-2 flex flex-wrap gap-2">
-              ${(e.participants_public||[]).slice(0,10).map(p=>`
+              ${(e.participants_public||[]).map(p=>`
                 <div class="flex items-center gap-1 bg-slate-50 border rounded-full px-2 py-1 text-xs cursor-pointer" onclick="openProfile('${p.id}')">
-                  <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-4 h-4 rounded-full">
+                  <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
                   <span class="font-bold">${p.nickname}</span>
                 </div>
               `).join('')}
-              ${pCount>10 ? `<span class="text-xs text-gray-400">+${pCount-10}</span>`:''}
             </div>
           </div>
         `;
@@ -1338,6 +1363,27 @@
         body: JSON.stringify({userId:user.id, eventId:eid})
       })).json();
       if(r.error) alert(r.error);
+      await refresh();
+    }
+
+    async function joinEvent(eid){
+      const r = await (await fetch('/api/event/join',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, eventId:eid})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("เข้าร่วมแล้ว!");
+      await refresh();
+    }
+
+    async function leaveEvent(eid){
+      if(!confirm("ยกเลิกเข้าร่วม?")) return;
+      const r = await (await fetch('/api/event/leave',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, eventId:eid})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("ยกเลิกเข้าร่วมแล้ว");
       await refresh();
     }
 
