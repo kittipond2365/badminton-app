@@ -1454,7 +1454,7 @@
       const myId = user.id;
       const filtered = hist.filter(m=>{
         if(historyMode === "global") return true;
-        return (m.team_a_ids.includes(myId) || m.team_b_ids.includes(myId));
+        return ((m.team_a_ids||[]).includes(myId) || (m.team_b_ids||[]).includes(myId));
       });
 
       if(!filtered.length){
@@ -1464,8 +1464,8 @@
 
       box.innerHTML = filtered.map(m=>{
         const winSide = m.winner;
-        const isMeA = m.team_a_ids.includes(myId);
-        const isMeB = m.team_b_ids.includes(myId);
+        const isMeA = (m.team_a_ids||[]).includes(myId);
+        const isMeB = (m.team_b_ids||[]).includes(myId);
         const meSide = isMeA ? "A" : (isMeB ? "B" : null);
         const iWon = meSide ? (meSide === winSide) : null;
 
@@ -1493,8 +1493,8 @@
             </div>
 
             <div class="grid grid-cols-2 gap-3">
-              <div class="space-y-2 ${teamAWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_a_ids)}</div>
-              <div class="space-y-2 ${teamBWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_b_ids)}</div>
+              <div class="space-y-2 ${teamAWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_a_ids||[])}</div>
+              <div class="space-y-2 ${teamBWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_b_ids||[])}</div>
             </div>
 
             <div class="mt-2 text-xs text-gray-600 flex justify-between">
@@ -1641,15 +1641,15 @@
           lastBox.innerHTML = `<div class="text-center text-gray-400 py-3">ไม่มีประวัติ</div>`;
         }else{
           lastBox.innerHTML = last.map(m=>{
-            const isA = m.team_a_ids.includes(r.id);
+            const isA = (m.team_a_ids||[]).includes(r.id);
             const meSide = isA ? "A" : "B";
             const iWon = m.winner === meSide;
             const delta = (m.mmr_changes && m.mmr_changes[r.id]!=null) ? m.mmr_changes[r.id] : 0;
             const score = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(" | ");
 
             // BUG FIX: show teammate and opponent names
-            const teammates = (isA ? m.team_a_ids : m.team_b_ids).filter(id=>id!==r.id);
-            const opponents = isA ? m.team_b_ids : m.team_a_ids;
+            const teammates = (isA ? (m.team_a_ids||[]) : (m.team_b_ids||[])).filter(id=>id!==r.id);
+            const opponents = isA ? (m.team_b_ids||[]) : (m.team_a_ids||[]);
             const tmName = teammates.map(id=>lookupName(id)).join(', ');
             const oppName = opponents.map(id=>lookupName(id)).join(', ');
 
