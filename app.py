@@ -32,6 +32,9 @@ DB_LOCK = threading.Lock()
 # =========================
 # Optimization: In-memory DB cache
 # =========================
+# IMPORTANT: Must run with 1 worker only!
+# Render: set env WEB_CONCURRENCY=1
+# Or use: gunicorn app:app --workers 1
 MATCH_HISTORY_MAX = 2000         # #3: cap history
 SAVE_INTERVAL_SEC = 5            # flush to disk every 5s
 _DB_CACHE = None                 # in-memory DB (the single source of truth)
@@ -127,6 +130,12 @@ def save_db(data=None):
         db["match_history"] = db["match_history"][:MATCH_HISTORY_MAX]
     _DB_VERSION += 1
     _DB_DIRTY = True
+
+def save_db_now(data=None):
+    """Critical save: mark dirty + immediate flush to disk.
+    Use for: match submit/cancel, MMR changes, session toggle, admin actions."""
+    save_db(data)
+    _flush_to_disk()
 
 def _flush_to_disk():
     """Actually write to disk (called by background thread)."""
@@ -1653,7 +1662,7 @@ def matchmake():
                 try_fill(cid)
 
     if changed:
-        save_db(db)
+        save_db_now(db)
         return jsonify({"success": True})
     return jsonify({"success": False, "status": "waiting_or_full"})
 
@@ -1682,7 +1691,7 @@ def manual_matchmake():
     teamA = [pids[0], pids[1]]
     teamB = [pids[2], pids[3]]
     _create_match_on_court(db, cid, teamA, teamB, reason="manual_admin")
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True})
 
 @app.route("/api/match/cancel", methods=["POST"])
@@ -1718,7 +1727,7 @@ def cancel_match():
     db["courts"][cid] = None
 
     changed = _maybe_run_automatch(db)
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True, "automatch_triggered": changed})
 
 @app.route("/api/match/submit", methods=["POST"])
@@ -1793,7 +1802,7 @@ def submit_match():
 
     changed = _maybe_run_automatch(db)
 
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True, "winner": result["winner"], "cooldown_min": cd_min, "automatch_triggered": changed})
 
 # =========================
@@ -1856,7 +1865,7 @@ def admin_toggle_session():
             p["incoming_reqs"] = []
             p["priority_match"] = False
 
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True})
 
 @app.route("/api/admin/update_courts", methods=["POST"])
@@ -1911,7 +1920,7 @@ def admin_manage_mod():
             db["mod_ids"].remove(tid)
     else:
         return jsonify({"error":"bad action"}), 400
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True, "mod_ids": db["mod_ids"]})
 
 @app.route("/api/admin/set_mmr", methods=["POST"])
@@ -1930,7 +1939,7 @@ def admin_set_mmr():
     except Exception:
         return jsonify({"error":"Invalid mmr"}), 400
     db["players"][tid]["mmr"] = nv
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True})
 
 @app.route("/api/admin/skip_queue", methods=["POST"])
@@ -2001,8 +2010,7 @@ def admin_hard_reset():
         new_db = deepcopy(DEFAULT_DB)
         _refresh_courts(new_db)
         _DB_CACHE = new_db
-        save_db(new_db)
-        _flush_to_disk()  # immediate flush for hard reset
+        save_db_now(new_db)
         return jsonify({"success": True, "mode": "all"})
 
     elif mode == "stats":
@@ -2035,8 +2043,7 @@ def admin_hard_reset():
         db["system_settings"]["recent_opponents"] = {}
         db["system_settings"]["automatch"] = {}
 
-        save_db(db)
-        _flush_to_disk()  # immediate flush for hard reset
+        save_db_now(db)
         return jsonify({"success": True, "mode": "stats"})
 
     return jsonify({"error": "Invalid mode"}), 400
@@ -2091,7 +2098,7 @@ def event_create():
     scoring = {"points": points, "bo": bo, "cap": 30}
 
     eid = _create_event(db, name=name, dt_ts=dt, status="open", scoring=scoring, location=location, notify=notify, end_datetime=end_dt)
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True, "eventId": eid})
 
 @app.route("/api/event/delete", methods=["POST"])
@@ -2107,7 +2114,7 @@ def event_delete():
     if db["system_settings"].get("current_event_id") == eid and db["system_settings"].get("is_session_active"):
         return jsonify({"error":"Can't delete active session event"}), 400
     db["events"].pop(eid, None)
-    save_db(db)
+    save_db_now(db)
     return jsonify({"success": True})
 
 @app.route("/api/event/join", methods=["POST"])
