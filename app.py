@@ -1,723 +1,785 @@
+# app.py
 import json
 import os
 import time
 import uuid
+import math
 import sys
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template
+import fcntl
 
 app = Flask(__name__)
 
-# ---------------- CONFIG ----------------
+# --- CONFIG ---
 SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9"
 DATA_FILE = "/var/data/izesquad_data.json"
 
-# ---------------- DEFAULT DB ----------------
+# --- DEFAULT DB ---
 default_db = {
     "system_settings": {
         "total_courts": 2,
         "is_session_active": False,
         "current_event_id": None,
         "session_config": {
-            "target_points": 21,     # 11 or 21
-            "bo": 1,                 # 1/2/3
-            "ready_check": False,    # default off (not used in this version)
-            "notify_enabled": False  # mod can toggle; frontend uses sound/vibrate anyway
+            "target_points": 21,       # 11 or 21
+            "bo": 1,                   # 1,2,3 (bo2 plays 2 sets always and winner can be decided by total points if 1-1)
+            "enable_notifications": False
         },
-        "court_automatch": {},       # courtId(str) -> bool
-        "avoid_teammate_pairs": []   # list of {"a":uid,"b":uid,"until":ts}
+        "auto_match_courts": {},       # {"1": true, "2": false, ...}
+        "suggested_cooldown_min": 0
     },
     "mod_ids": [],
     "players": {},
-    "events": {},                   # session history
-    "match_history": [],            # global completed matches (latest first)
-    "billing_history": [],
-    "courts_state": {}              # courtId(str) -> match dict or None
+    "events": {},
+    "match_history": [],
+    "recent_avoids": [],              # [{"pair":[id1,id2], "until":ts}, ...] avoids teammate pairing for a while
+    "courts_state": {}                # {"1": match_obj_or_null, "2": null, ...}
 }
 
-# ---------------- LOGGER ----------------
-def log(msg):
+def now_ts() -> float:
+    return time.time()
+
+def log(msg: str):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", file=sys.stdout)
     sys.stdout.flush()
 
-# ---------------- FILE OPS ----------------
-def init_db():
+# --- FILE LOCKED IO ---
+def _ensure_file():
     directory = os.path.dirname(DATA_FILE)
     if directory and not os.path.exists(directory):
         os.makedirs(directory, exist_ok=True)
-
     if not os.path.exists(DATA_FILE):
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(default_db, f, ensure_ascii=False, indent=4)
 
 def get_db():
-    init_db()
+    _ensure_file()
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
-        # fill missing keys
-        for k in default_db:
-            if k not in data:
-                data[k] = default_db[k]
-        # deep fill for system_settings
-        for k in default_db["system_settings"]:
-            if k not in data["system_settings"]:
-                data["system_settings"][k] = default_db["system_settings"][k]
-        # ensure dicts exist
-        if "court_automatch" not in data["system_settings"]:
-            data["system_settings"]["court_automatch"] = {}
-        if "avoid_teammate_pairs" not in data["system_settings"]:
-            data["system_settings"]["avoid_teammate_pairs"] = []
-        if "courts_state" not in data:
-            data["courts_state"] = {}
-        return data
+            fcntl.flock(f, fcntl.LOCK_UN)
     except Exception as e:
-        log(f"Error reading DB: {e}")
-        return json.loads(json.dumps(default_db))
+        log(f"DB read error: {e}")
+        data = json.loads(json.dumps(default_db))
+
+    # Backfill top-level keys
+    for k, v in default_db.items():
+        if k not in data:
+            data[k] = json.loads(json.dumps(v))
+
+    # Backfill system_settings keys
+    ss = data.get("system_settings", {})
+    for k, v in default_db["system_settings"].items():
+        if k not in ss:
+            ss[k] = json.loads(json.dumps(v))
+    if "session_config" not in ss:
+        ss["session_config"] = json.loads(json.dumps(default_db["system_settings"]["session_config"]))
+    for k, v in default_db["system_settings"]["session_config"].items():
+        if k not in ss["session_config"]:
+            ss["session_config"][k] = v
+    if "auto_match_courts" not in ss or not isinstance(ss["auto_match_courts"], dict):
+        ss["auto_match_courts"] = {}
+    if "suggested_cooldown_min" not in ss:
+        ss["suggested_cooldown_min"] = 0
+    data["system_settings"] = ss
+
+    # Refresh courts containers to ensure keys exist
+    _refresh_courts_storage(data)
+
+    # --- MIGRATION / BACKFILL PLAYERS (fix "rank disappeared" for old data) ---
+    players = data.get("players", {})
+    for uid, p in players.items():
+        p.setdefault("id", uid)
+        p.setdefault("nickname", "User")
+        p.setdefault("pictureUrl", "")
+        p.setdefault("mmr", 1000)
+        # If old players had no calibrate, assume already ranked
+        if "calibrate_games" not in p:
+            p["calibrate_games"] = 10
+        p.setdefault("calibrate_wins", 0)
+        p.setdefault("calibrate_losses", 0)
+
+        p.setdefault("status", "offline")               # offline/active/playing
+        p.setdefault("last_active", now_ts())
+        p.setdefault("queue_join_time", None)           # when they checked-in (used for waiting time)
+        p.setdefault("resting", False)
+        p.setdefault("rest_until", None)                # if set, resting=True until this time
+        p.setdefault("auto_rest", False)                # player opt-in
+        # pairing request system
+        p.setdefault("outgoing_request_to", None)        # requester -> target
+        p.setdefault("incoming_requests", [])            # list of requester ids
+        p.setdefault("pair_lock", None)                  # accepted pair partner id
+
+        # stats (set-based)
+        p.setdefault("sets_w", 0)
+        p.setdefault("sets_l", 0)
+        p.setdefault("pts_for", 0)
+        p.setdefault("pts_against", 0)
+    data["players"] = players
+
+    # Backfill mod_ids
+    if "mod_ids" not in data or not isinstance(data["mod_ids"], list):
+        data["mod_ids"] = []
+
+    # Backfill lists
+    if "match_history" not in data or not isinstance(data["match_history"], list):
+        data["match_history"] = []
+    if "recent_avoids" not in data or not isinstance(data["recent_avoids"], list):
+        data["recent_avoids"] = []
+
+    return data
 
 def save_db(data):
-    # atomic save
+    _ensure_file()
     try:
-        tmp = DATA_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(DATA_FILE, "r+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            f.truncate()
             json.dump(data, f, ensure_ascii=False, indent=4)
-        os.replace(tmp, DATA_FILE)
+            f.flush()
+            os.fsync(f.fileno())
+            fcntl.flock(f, fcntl.LOCK_UN)
     except Exception as e:
-        log(f"CRITICAL ERROR SAVING DB: {e}")
+        log(f"CRITICAL DB save error: {e}")
 
-def refresh_courts(db):
-    target = int(db["system_settings"].get("total_courts", 2))
+def _refresh_courts_storage(db):
+    total = int(db["system_settings"].get("total_courts", 2) or 2)
     # courts_state
-    for i in range(1, target + 1):
-        k = str(i)
-        if k not in db["courts_state"]:
-            db["courts_state"][k] = None
-    for k in list(db["courts_state"].keys()):
-        if int(k) > target:
-            del db["courts_state"][k]
-
-    # automatch map
-    cam = db["system_settings"].get("court_automatch", {})
-    for i in range(1, target + 1):
-        k = str(i)
-        if k not in cam:
-            cam[k] = False
-    for k in list(cam.keys()):
-        if int(k) > target:
-            del cam[k]
-    db["system_settings"]["court_automatch"] = cam
-
-# ---------------- AUTH ----------------
-def is_super(uid):
-    return uid == SUPER_ADMIN_ID
-
-def is_mod(db, uid):
-    return uid in db.get("mod_ids", []) or is_super(uid)
-
-# ---------------- RANK / DISPLAY ----------------
-def get_rank_title(mmr):
-    try:
-        val = int(mmr)
-    except:
-        val = 1000
-    if val <= 800:
-        return "NOOB DOG 🐶"
-    elif val <= 1200:
-        return "NOOB 🐣"
-    elif val <= 1400:
-        return "เด็กกระโปก 👶"
-    elif val <= 1600:
-        return "ชนะจนเบื่อ 🥱"
-    else:
-        return "โปรเพรเย๋อ 👽"
-
-def is_unranked(p):
-    return int(p.get("calibrate_games", 0)) < 10
-
-def display_rank_text(p):
-    cg = int(p.get("calibrate_games", 0))
-    if cg < 10:
-        return f"UNRANKED ({cg}/10)"
-    return get_rank_title(p.get("mmr", 1000))
-
-# ---------------- MATCH TIME AVERAGE (last 10 completed) ----------------
-def compute_avg_match_minutes(db, n=10, default=18, min_cap=5, max_cap=60):
-    durations = []
-    for m in db.get("match_history", []):
-        if m.get("status") != "completed":
-            continue
-        dur_sec = m.get("duration_sec")
-        if isinstance(dur_sec, (int, float)):
-            dm = dur_sec / 60.0
-        else:
-            dm = m.get("duration_min")
-            if not isinstance(dm, (int, float)):
-                continue
-            dm = float(dm)
-        dm = max(min_cap, min(max_cap, dm))
-        durations.append(dm)
-        if len(durations) >= n:
-            break
-    if not durations:
-        return default
-    return sum(durations) / len(durations)
-
-# ---------------- SCORE VALIDATION (deuce to 30) ----------------
-def validate_set_score(a, b, target):
-    # returns (ok, msg)
-    if not isinstance(a, int) or not isinstance(b, int):
-        return (False, "คะแนนต้องเป็นตัวเลข")
-    if a < 0 or b < 0:
-        return (False, "คะแนนต้องไม่ติดลบ")
-    if a > 30 or b > 30:
-        return (False, "คะแนนสูงสุดคือ 30")
-    if a == b:
-        return (False, "ห้ามเสมอ")
-
-    win = max(a, b)
-    lose = min(a, b)
-
-    if win < target:
-        return (False, f"แต้มต้องถึง {target} หรือดิวส์")
-    if win == 30:
-        if lose == 29:
-            return (True, "")
-        return (False, "ถ้าแต้มถึง 30 ต้องเป็น 30-29 เท่านั้น")
-    # win < 30
-    if (win - lose) >= 2:
-        return (True, "")
-    return (False, "ดิวส์ต้องชนะห่าง 2 แต้ม (จนกว่าจะถึง 30-29)")
-
-def determine_winner_from_scores(set_scores, config):
-    """
-    set_scores: list of {"a":int,"b":int}
-    config: {"target_points": 11/21, "bo":1/2/3}
-    """
-    target = int(config.get("target_points", 21))
-    bo = int(config.get("bo", 1))
-
-    if bo == 1:
-        if len(set_scores) != 1:
-            return (None, "BO1 ต้องมี 1 เซต")
-    elif bo == 2:
-        if len(set_scores) != 2:
-            return (None, "BO2 ต้องมี 2 เซต")
-    elif bo == 3:
-        if len(set_scores) < 2 or len(set_scores) > 3:
-            return (None, "BO3 ต้องมี 2-3 เซต")
-    else:
-        return (None, "ค่า BO ไม่ถูกต้อง")
-
-    # validate each set
-    for s in set_scores:
-        ok, msg = validate_set_score(int(s["a"]), int(s["b"]), target)
-        if not ok:
-            return (None, msg)
-
-    pointsA = sum(int(s["a"]) for s in set_scores)
-    pointsB = sum(int(s["b"]) for s in set_scores)
-
-    sets_won_a = 0
-    sets_won_b = 0
-    for s in set_scores:
-        if int(s["a"]) > int(s["b"]):
-            sets_won_a += 1
-        else:
-            sets_won_b += 1
-
-    # winner rule
-    if bo == 1:
-        winner = "A" if sets_won_a == 1 else "B"
-    elif bo == 2:
-        if pointsA == pointsB:
-            return (None, "BO2 นับแต้มรวม ห้ามแต้มรวมเสมอ")
-        winner = "A" if pointsA > pointsB else "B"
-    else:  # bo3
-        if sets_won_a >= 2:
-            winner = "A"
-        elif sets_won_b >= 2:
-            winner = "B"
-        else:
-            return (None, "BO3 ต้องมีฝ่ายใดฝ่ายหนึ่งชนะถึง 2 เซต")
-
-    return ({
-        "winner": winner,
-        "sets_won_a": sets_won_a,
-        "sets_won_b": sets_won_b,
-        "points_a_total": pointsA,
-        "points_b_total": pointsB
-    }, "")
-
-# ---------------- MMR CALC (Elo + score margin + format factor) ----------------
-def k_for_player(p):
-    cg = int(p.get("calibrate_games", 0))
-    # K = 90 - 4*games_played, not lower than 50
-    return max(50.0, 90.0 - 4.0 * cg) if cg < 10 else 50.0
-
-def calc_expected(teamA_mmr, teamB_mmr):
-    # Elo 400 scale
-    return 1.0 / (1.0 + 10 ** ((teamB_mmr - teamA_mmr) / 400.0))
-
-def margin_multiplier(pointsA, pointsB):
-    diff = abs(pointsA - pointsB)
-    total = max(1, pointsA + pointsB)
-    margin = diff / total
-    m = 1.0 + margin
-    # clamp 0.85 .. 1.15
-    return max(0.85, min(1.15, m))
-
-def format_factor(bo):
-    bo = int(bo)
-    if bo == 2:
-        return 1.05
-    if bo == 3:
-        return 1.10
-    return 1.00
-
-def compute_team_mmr(db, team_ids):
-    vals = []
-    for uid in team_ids:
-        p = db["players"].get(uid)
-        if not p:
-            continue
+    cs = db.get("courts_state", {})
+    if not isinstance(cs, dict):
+        cs = {}
+    for i in range(1, total + 1):
+        cs.setdefault(str(i), None)
+    for k in list(cs.keys()):
         try:
-            vals.append(int(p.get("mmr", 1000)))
+            if int(k) > total:
+                del cs[k]
         except:
-            vals.append(1000)
-    if not vals:
-        return 1000.0
-    return sum(vals) / len(vals)
+            pass
+    db["courts_state"] = cs
+    # auto_match_courts
+    am = db["system_settings"].get("auto_match_courts", {})
+    if not isinstance(am, dict):
+        am = {}
+    for i in range(1, total + 1):
+        am.setdefault(str(i), False)
+    for k in list(am.keys()):
+        try:
+            if int(k) > total:
+                del am[k]
+        except:
+            pass
+    db["system_settings"]["auto_match_courts"] = am
 
-def compute_mmr_delta(db, team_a_ids, team_b_ids, winner, pointsA, pointsB, bo):
-    teamA = compute_team_mmr(db, team_a_ids)
-    teamB = compute_team_mmr(db, team_b_ids)
-    EA = calc_expected(teamA, teamB)
-    SA = 1.0 if winner == "A" else 0.0
+# --- RANK / BADGE (Set A + T1–T9 with T8 secondary, T9 error) ---
+def _is_unranked(p) -> bool:
+    return int(p.get("calibrate_games", 0) or 0) < 10
 
-    # K base = average K of all 4 players (keeps near zero-sum)
-    ks = []
-    for uid in (team_a_ids + team_b_ids):
-        p = db["players"].get(uid)
-        if p:
-            ks.append(k_for_player(p))
-    K = sum(ks) / len(ks) if ks else 50.0
+def rank_title_set_a(mmr: int) -> str:
+    if mmr <= 899: return "ลูกเจี๊ยบหลุดคอร์ท 🐣"
+    if mmr <= 999: return "มือใหม่ใจเกิน 💫"
+    if mmr <= 1099: return "ตีได้…แต่มั่วอยู่ 😵‍💫"
+    if mmr <= 1199: return "พอรู้เรื่องละนะ 😏"
+    if mmr <= 1299: return "สายวางลูก 🎯"
+    if mmr <= 1399: return "ตบดังแต่ไม่ลง 🔨"
+    if mmr <= 1499: return "คุมเกมนิ่ง ๆ 🧠"
+    if mmr <= 1599: return "ขาไว ไม้ไว ⚡"
+    if mmr <= 1699: return "นักแก้ทาง 🧩"
+    if mmr <= 1799: return "ตัวเปิดเกมของก๊วน 🚀"
+    if mmr <= 1899: return "แบกได้ (นิดนึง) 🫠"
+    if mmr <= 1999: return "โปรก๊วนประจำวัน 👑"
+    if mmr <= 2149: return "จอมยุทธสายตบ 🐉"
+    if mmr <= 2299: return "บอสประจำสนาม 🧨"
+    if mmr <= 2499: return "ตำนานเล่าขาน 📜"
+    return "เทพเจ้าก๊วนแบด ⚜️"
 
-    M = margin_multiplier(pointsA, pointsB)
-    F = format_factor(bo)
-
-    delta_team = K * (SA - EA) * M * F
-    # winners get +round, losers get -round
-    d = int(round(delta_team))
-    if d == 0:
-        # keep minimum movement if extremely tiny? user didn't ask; keep 0 possible
-        pass
-
-    delta_by_player = {}
-    if winner == "A":
-        for uid in team_a_ids:
-            delta_by_player[uid] = abs(d)
-        for uid in team_b_ids:
-            delta_by_player[uid] = -abs(d)
-    else:
-        for uid in team_a_ids:
-            delta_by_player[uid] = -abs(d)
-        for uid in team_b_ids:
-            delta_by_player[uid] = abs(d)
-
-    return delta_by_player
-
-# ---------------- STATS FROM HISTORY ----------------
-def compute_player_stats(db, uid, limit=None):
+def get_rank_badges(p):
     """
-    stats by SET (as requested) + points for/against totals
+    Returns:
+      - primary badge: {text, cls}
+      - optional secondary badge (for UNRANK): {text, cls}
     """
-    sets_won = 0
-    sets_lost = 0
-    points_for = 0
-    points_against = 0
-    matches = 0
+    cg = int(p.get("calibrate_games", 0) or 0)
+    if cg < 10:
+        return (
+            {"text": "UNRANK", "cls": "badge-ghost"},
+            {"text": f"{cg}/10", "cls": "badge-outline"}
+        )
 
-    hist = db.get("match_history", [])
-    for m in hist:
-        if m.get("status") != "completed":
-            continue
-        a_ids = m.get("team_a_ids", [])
-        b_ids = m.get("team_b_ids", [])
-        if uid not in a_ids and uid not in b_ids:
-            continue
+    mmr = int(p.get("mmr", 1000) or 1000)
 
-        matches += 1
-        sw_a = int(m.get("sets_won_a", 0))
-        sw_b = int(m.get("sets_won_b", 0))
-        pa = int(m.get("points_a_total", 0))
-        pb = int(m.get("points_b_total", 0))
+    # Tiers T1–T9 (T8: 1600–1799 secondary, T9: 1800+ error)
+    if mmr <= 899:
+        return ({"text": "T1 🐣", "cls": "badge-neutral"}, None)
+    if mmr <= 999:
+        return ({"text": "T2 💫", "cls": "badge-info"}, None)
+    if mmr <= 1099:
+        return ({"text": "T3 😵‍💫", "cls": "badge-ghost"}, None)
+    if mmr <= 1199:
+        return ({"text": "T4 😏", "cls": "badge-success"}, None)
+    if mmr <= 1299:
+        return ({"text": "T5 🎯", "cls": "badge-primary"}, None)
+    if mmr <= 1399:
+        return ({"text": "T6 🔨", "cls": "badge-warning"}, None)
+    if mmr <= 1599:
+        # T7 (accent), name changes are handled by title
+        return ({"text": "T7 🧠", "cls": "badge-accent"}, None)
+    if mmr <= 1799:
+        # T8 secondary
+        return ({"text": "T8 🚀", "cls": "badge-secondary"}, None)
+    # T9 error
+    return ({"text": "T9 👑", "cls": "badge-error"}, None)
 
-        if uid in a_ids:
-            sets_won += sw_a
-            sets_lost += sw_b
-            points_for += pa
-            points_against += pb
-        else:
-            sets_won += sw_b
-            sets_lost += sw_a
-            points_for += pb
-            points_against += pa
+def mmr_display(p):
+    # Hide mmr everywhere for unranked
+    cg = int(p.get("calibrate_games", 0) or 0)
+    if cg < 10:
+        return f"UNRANK ({cg}/10)"
+    return str(int(p.get("mmr", 1000) or 1000))
 
-        if limit and matches >= limit:
-            break
-
-    total_sets = sets_won + sets_lost
-    win_rate = int(round((sets_won / total_sets) * 100)) if total_sets > 0 else 0
-    diff = points_for - points_against
-
+def progress_info(p):
+    cg = int(p.get("calibrate_games", 0) or 0)
+    if cg < 10:
+        pct = int(round((cg / 10) * 100))
+        return {
+            "mode": "calibrate",
+            "min": 0, "max": 10,
+            "value": cg,
+            "pct": pct,
+            "hint": "Calibrating"
+        }
+    mmr = int(p.get("mmr", 1000) or 1000)
+    base = (mmr // 100) * 100
+    seg_min = base
+    seg_max = base + 99
+    pct = int(round(((mmr - seg_min) / 99) * 100))
+    hint = ""
+    if pct >= 90:
+        hint = "ใกล้อัป ⬆️"
+    elif pct <= 10:
+        hint = "เสี่ยงตก ⬇️"
     return {
-        "set_winrate": win_rate,
-        "sets_won": sets_won,
-        "sets_lost": sets_lost,
-        "points_for_total": points_for,
-        "points_against_total": points_against,
-        "point_diff_total": diff
+        "mode": "mmr100",
+        "min": seg_min, "max": seg_max,
+        "value": mmr,
+        "pct": max(0, min(100, pct)),
+        "hint": hint
     }
 
-# ---------------- PARTNER REQUEST LOGIC ----------------
-def remove_from_incoming(db, target_id, requester_id):
-    t = db["players"].get(target_id)
-    if not t:
-        return
-    inc = t.get("incoming_requests", [])
-    if requester_id in inc:
-        inc.remove(requester_id)
-    t["incoming_requests"] = inc
+def winrate_percent(p):
+    w = int(p.get("sets_w", 0) or 0)
+    l = int(p.get("sets_l", 0) or 0)
+    total = w + l
+    if total <= 0:
+        return None
+    return int(round((w / total) * 100))
 
-def cancel_outgoing(db, requester_id):
-    p = db["players"].get(requester_id)
+def get_wr_badge(p):
+    wr = winrate_percent(p)
+    if wr is None:
+        return {"text": "WR - 🙂", "cls": "badge-ghost"}
+    if wr < 40:
+        return {"text": f"WR {wr}% 😵‍💫", "cls": "badge-error"}
+    if wr < 60:
+        return {"text": f"WR {wr}% 🙂", "cls": "badge-neutral"}
+    return {"text": f"WR {wr}% 🔥", "cls": "badge-success"}
+
+# --- SESSION HELPERS ---
+def is_staff(uid, db):
+    return uid == SUPER_ADMIN_ID or uid in db.get("mod_ids", [])
+
+def _current_event(db):
+    eid = db["system_settings"].get("current_event_id")
+    if eid and eid in db["events"]:
+        return db["events"][eid]
+    return None
+
+def _ensure_participant(db, uid):
+    evt = _current_event(db)
+    if not evt:
+        return
+    evt.setdefault("participants", [])
+    if uid not in evt["participants"]:
+        evt["participants"].append(uid)
+
+def _cleanup_resting(db):
+    now = now_ts()
+    for p in db["players"].values():
+        if p.get("resting") and p.get("rest_until"):
+            try:
+                if now >= float(p["rest_until"]):
+                    p["resting"] = False
+                    p["rest_until"] = None
+            except:
+                p["resting"] = False
+                p["rest_until"] = None
+
+def _compute_suggested_cooldown_min(db):
+    # avg duration of last 10 matches (minutes)
+    hist = [m for m in db.get("match_history", []) if m.get("duration_sec") is not None and not m.get("cancelled")]
+    hist = hist[:10]
+    if len(hist) == 0:
+        avg_min = 12
+    else:
+        avg_min = max(5, int(round(sum([h.get("duration_sec", 0) for h in hist]) / len(hist) / 60)))
+    total_courts = int(db["system_settings"].get("total_courts", 2) or 2)
+    active_count = len([p for p in db["players"].values() if p.get("status") == "active"])
+    ratio = active_count / max(1, total_courts * 4)
+    # fewer players -> more likely to repeat -> larger cooldown suggestion
+    cooldown = int(round(avg_min * max(0.0, 1.2 - ratio)))
+    cooldown = max(0, min(avg_min, cooldown))
+    db["system_settings"]["suggested_cooldown_min"] = cooldown
+
+# --- PAIR REQUEST RULES ---
+def _cancel_outgoing(db, uid):
+    p = db["players"].get(uid)
     if not p:
         return
-    tgt = p.get("outgoing_request_to")
-    if tgt:
-        remove_from_incoming(db, tgt, requester_id)
+    target = p.get("outgoing_request_to")
+    if target and target in db["players"]:
+        tr = db["players"][target]
+        if uid in tr.get("incoming_requests", []):
+            tr["incoming_requests"].remove(uid)
     p["outgoing_request_to"] = None
 
-def unpair(db, uid):
+def _break_pair(db, uid):
     p = db["players"].get(uid)
     if not p:
         return
     partner = p.get("pair_lock")
-    p["pair_lock"] = None
     if partner and partner in db["players"]:
         db["players"][partner]["pair_lock"] = None
+    p["pair_lock"] = None
 
-# ---------------- MATCHMAKING ----------------
-def now_ts():
-    return time.time()
+def _clear_pairing_state_on_offline(db, uid):
+    p = db["players"].get(uid)
+    if not p:
+        return
+    # break pair + cancel outgoing
+    _break_pair(db, uid)
+    _cancel_outgoing(db, uid)
+    # remove this uid from others' incoming lists (optional: keep requests even if offline? better remove)
+    for op in db["players"].values():
+        if uid in op.get("incoming_requests", []):
+            op["incoming_requests"].remove(uid)
 
-def clean_expired_avoid_pairs(db):
-    ap = db["system_settings"].get("avoid_teammate_pairs", [])
-    t = now_ts()
-    ap = [x for x in ap if x.get("until", 0) > t]
-    db["system_settings"]["avoid_teammate_pairs"] = ap
-
-def is_avoid_pair(db, u1, u2):
-    a = str(min(u1, u2))
-    b = str(max(u1, u2))
-    for x in db["system_settings"].get("avoid_teammate_pairs", []):
-        if x.get("a") == a and x.get("b") == b and x.get("until", 0) > now_ts():
-            return True
-    return False
-
-def eligible_players(db):
-    """
-    Eligible for matchmaking:
-    - session active
-    - status == active
-    - not playing
-    - not resting (resting True or rest_until in future)
-    - if pair_lock exists, partner must also be eligible (so they can play together)
-    """
-    if not db["system_settings"].get("is_session_active"):
-        return []
-
-    t = now_ts()
+# --- MATCHMAKING ---
+def _eligible_queue(db):
+    _cleanup_resting(db)
+    now = now_ts()
     players = []
     for p in db["players"].values():
         if p.get("status") != "active":
             continue
+        # rest exclude
         if p.get("resting"):
-            # resting but keep queue time; not eligible
-            ru = p.get("rest_until")
-            if ru and isinstance(ru, (int, float)) and ru <= t:
-                # auto rest expired
-                p["resting"] = False
-                p["rest_until"] = None
-            else:
-                continue
-
-        # if locked pair, ensure partner eligible too
-        partner = p.get("pair_lock")
-        if partner:
-            pp = db["players"].get(partner)
-            if not pp:
-                continue
-            if pp.get("status") != "active":
-                continue
-            if pp.get("resting"):
-                ru2 = pp.get("rest_until")
-                if ru2 and isinstance(ru2, (int, float)) and ru2 <= t:
-                    pp["resting"] = False
-                    pp["rest_until"] = None
-                else:
-                    continue
-        # must have queue_join_time
-        if not isinstance(p.get("queue_join_time"), (int, float)):
-            p["queue_join_time"] = t
+            continue
+        qjt = p.get("queue_join_time")
+        if not qjt:
+            p["queue_join_time"] = now
+            qjt = now
         players.append(p)
+    players.sort(key=lambda x: float(x.get("queue_join_time", now)))
     return players
 
-def build_groups_for_queue(db, players):
-    """
-    Groups = locked pairs (size 2) or singles (size 1)
-    group_wait = max(queue_join_time of members) to avoid pair jumping ahead unfairly
-    """
-    seen = set()
-    groups = []
-    for p in players:
-        uid = p["id"]
-        if uid in seen:
+def _effective_mmr_for_matchmaking(p):
+    # During calibrate, push effective mmr up/down faster based on results to match harder/easier opponents quickly
+    mmr = int(p.get("mmr", 1000) or 1000)
+    cg = int(p.get("calibrate_games", 0) or 0)
+    if cg >= 10:
+        return mmr
+    w = int(p.get("calibrate_wins", 0) or 0)
+    l = int(p.get("calibrate_losses", 0) or 0)
+    # small but meaningful spread
+    bump = (w - l) * 80
+    return mmr + bump
+
+def _avoid_pairs(db):
+    now = now_ts()
+    cleaned = []
+    blocked = set()
+    for item in db.get("recent_avoids", []):
+        try:
+            until = float(item.get("until", 0))
+            pair = item.get("pair", [])
+            if until > now and isinstance(pair, list) and len(pair) == 2:
+                a, b = pair[0], pair[1]
+                key = tuple(sorted([a, b]))
+                blocked.add(key)
+                cleaned.append(item)
+        except:
             continue
-        partner = p.get("pair_lock")
-        if partner and partner in db["players"]:
-            pp = db["players"][partner]
-            if pp.get("status") == "active" and (not pp.get("resting")):
-                qt = max(float(p.get("queue_join_time", now_ts())), float(pp.get("queue_join_time", now_ts())))
-                groups.append({"type": "pair", "members": [p, pp], "qt": qt})
-                seen.add(uid)
-                seen.add(partner)
-                continue
-        groups.append({"type": "single", "members": [p], "qt": float(p.get("queue_join_time", now_ts()))})
-        seen.add(uid)
-    groups.sort(key=lambda g: g["qt"])
-    return groups
+    db["recent_avoids"] = cleaned
+    return blocked
 
-def fairness_score(db, teamA_ids, teamB_ids):
-    # team avg diff + penalty for internal diff to avoid "carry" pairs
-    teamA = compute_team_mmr(db, teamA_ids)
-    teamB = compute_team_mmr(db, teamB_ids)
-    diff_team = abs(teamA - teamB)
-
-    def internal_gap(ids):
-        if len(ids) != 2:
-            return 0.0
-        a = int(db["players"][ids[0]].get("mmr", 1000))
-        b = int(db["players"][ids[1]].get("mmr", 1000))
-        return abs(a - b)
-
-    gapA = internal_gap(teamA_ids)
-    gapB = internal_gap(teamB_ids)
-    internal_max = max(gapA, gapB)
-
-    # avoid same teammate pair right after cancel (hard penalty)
-    avoid_pen = 0.0
-    if len(teamA_ids) == 2 and is_avoid_pair(db, teamA_ids[0], teamA_ids[1]):
-        avoid_pen += 99999.0
-    if len(teamB_ids) == 2 and is_avoid_pair(db, teamB_ids[0], teamB_ids[1]):
-        avoid_pen += 99999.0
-
-    alpha = 0.6  # penalty weight for carry pairing
-    return diff_team + alpha * internal_max + avoid_pen
-
-def best_team_split(db, ids, locked_pairs):
-    """
-    Try all partitions into 2 teams of 2, respecting locked pairs
-    """
-    if len(ids) != 4:
-        return None
-
-    candidates = [
-        ([ids[0], ids[1]], [ids[2], ids[3]]),
-        ([ids[0], ids[2]], [ids[1], ids[3]]),
-        ([ids[0], ids[3]], [ids[1], ids[2]]),
-    ]
-
-    def respects_locked(teamA, teamB):
-        for a, b in locked_pairs:
-            # must be in same team
-            inA = (a in teamA and b in teamA)
-            inB = (a in teamB and b in teamB)
-            if not (inA or inB):
-                return False
-        return True
-
-    best = None
-    best_score = None
-    for ta, tb in candidates:
-        if not respects_locked(ta, tb):
-            continue
-        sc = fairness_score(db, ta, tb)
-        if best is None or sc < best_score:
-            best = (ta, tb)
-            best_score = sc
-    return best
-
-def choose_best_four(db, max_candidates=10):
-    """
-    Priority waiting time first, then fairness.
-    We evaluate combinations of 4 among first K candidates (by queue time),
-    but we strongly weight waiting rank to keep oldest-first.
-    """
-    clean_expired_avoid_pairs(db)
-
-    players = eligible_players(db)
-    if len(players) < 4:
-        return None
-
-    # sort by queue time
-    players.sort(key=lambda p: float(p.get("queue_join_time", now_ts())))
-    # build groups (pairs/singles)
-    groups = build_groups_for_queue(db, players)
-
-    # flatten to unique player list (keep order by queue)
-    ordered = []
-    seen = set()
-    for g in groups:
-        for m in g["members"]:
-            if m["id"] not in seen:
-                ordered.append(m)
-                seen.add(m["id"])
-
-    K = min(max_candidates, len(ordered))
-    cand = ordered[:K]
-
-    # locked pairs inside cand
-    locked_pairs = set()
-    for p in cand:
-        partner = p.get("pair_lock")
-        if partner and partner in db["players"]:
-            a = p["id"]
-            b = partner
-            if a in [x["id"] for x in cand] and b in [x["id"] for x in cand]:
-                locked_pairs.add(tuple(sorted([a, b])))
-
-    cand_ids = [p["id"] for p in cand]
-    rank_index = {uid: i for i, uid in enumerate(cand_ids)}
-
-    # helper to validate combination respects locked pairs (must include both or neither)
-    def valid_combo(combo_ids):
-        s = set(combo_ids)
-        for a, b in locked_pairs:
-            if (a in s) ^ (b in s):
-                return False
-        return True
-
-    # enumerate combinations
-    import itertools
-    best_choice = None
-    best_score = None
-
-    W = 10000.0  # huge to ensure waiting dominates
-    for combo in itertools.combinations(cand_ids, 4):
-        if not valid_combo(combo):
-            continue
-
-        # waiting penalty
-        wait_pen = sum(rank_index[u] for u in combo) * W
-
-        # locked pairs within combo
-        lp = []
-        for a, b in locked_pairs:
-            if a in combo and b in combo:
-                lp.append((a, b))
-
-        split = best_team_split(db, list(combo), lp)
-        if not split:
-            continue
-        ta, tb = split
-        fair = fairness_score(db, ta, tb)
-
-        score = wait_pen + fair
-        if best_choice is None or score < best_score:
-            best_choice = (ta, tb)
-            best_score = score
-
-    return best_choice
-
-def start_match_on_court(db, court_id, teamA_ids, teamB_ids, source="auto"):
-    """
-    Create match with 60s countdown; store queue snapshot for cancel restore.
-    """
-    t = now_ts()
-    match_id = str(uuid.uuid4())[:8]
-    teamA_names = [db["players"][u]["nickname"] for u in teamA_ids]
-    teamB_names = [db["players"][u]["nickname"] for u in teamB_ids]
-
-    queue_snapshot = {}
-    for uid in teamA_ids + teamB_ids:
-        p = db["players"].get(uid)
-        if not p:
-            continue
-        queue_snapshot[uid] = float(p.get("queue_join_time", t))
-
-    # set players status to playing
-    for uid in teamA_ids + teamB_ids:
-        p = db["players"].get(uid)
-        if p:
-            p["status"] = "playing"
-            p["last_active"] = t
-
-    m = {
-        "match_id": match_id,
-        "court_id": str(court_id),
-        "created_at": t,
-        "start_at": t + 60.0,  # start timer after 1 minute
-        "team_a_ids": teamA_ids,
-        "team_b_ids": teamB_ids,
-        "team_a": teamA_names,
-        "team_b": teamB_names,
-        "queue_snapshot": queue_snapshot,
-        "source": source
-    }
-    db["courts_state"][str(court_id)] = m
-    return m
-
-def try_automatch_for_court(db, court_id):
-    refresh_courts(db)
-    if not db["system_settings"].get("is_session_active"):
-        return False
-    cam = db["system_settings"].get("court_automatch", {})
-    if not cam.get(str(court_id), False):
-        return False
-    if db["courts_state"].get(str(court_id)) is not None:
-        return False
-
-    choice = choose_best_four(db)
-    if not choice:
-        return False
-    teamA_ids, teamB_ids = choice
-    start_match_on_court(db, court_id, teamA_ids, teamB_ids, source="automatch")
+def _pair_constraints_ok(group):
+    # If someone is pair_locked, partner must be included
+    ids = set([p["id"] for p in group])
+    for p in group:
+        pl = p.get("pair_lock")
+        if pl and pl not in ids:
+            return False
     return True
 
-def try_automatch_all(db):
-    refresh_courts(db)
+def _team_splits_for_four(players4):
+    # returns list of (teamA, teamB) where each is list of 2 players
+    a,b,c,d = players4
+    return [
+        ([a,b],[c,d]),
+        ([a,c],[b,d]),
+        ([a,d],[b,c]),
+    ]
+
+def _respects_pair_lock(teamA, teamB):
+    # If any player has pair_lock, they must be on same team as partner
+    idsA = set([p["id"] for p in teamA])
+    idsB = set([p["id"] for p in teamB])
+    for p in teamA + teamB:
+        partner = p.get("pair_lock")
+        if partner:
+            if (p["id"] in idsA and partner not in idsA) or (p["id"] in idsB and partner not in idsB):
+                return False
+    return True
+
+def _score_split(teamA, teamB, waits, avoid_blocked):
+    # objective: waiting time first (prefer larger total waiting), then fairness:
+    # - team sum diff small
+    # - within-team diff small (avoid carry)
+    # - large within-team diff gets extra penalty unless unavoidable
+    mmrA = sum([_effective_mmr_for_matchmaking(p) for p in teamA])
+    mmrB = sum([_effective_mmr_for_matchmaking(p) for p in teamB])
+    sum_diff = abs(mmrA - mmrB)
+
+    within = abs(_effective_mmr_for_matchmaking(teamA[0]) - _effective_mmr_for_matchmaking(teamA[1])) + \
+             abs(_effective_mmr_for_matchmaking(teamB[0]) - _effective_mmr_for_matchmaking(teamB[1]))
+    max_within = max(
+        abs(_effective_mmr_for_matchmaking(teamA[0]) - _effective_mmr_for_matchmaking(teamA[1])),
+        abs(_effective_mmr_for_matchmaking(teamB[0]) - _effective_mmr_for_matchmaking(teamB[1]))
+    )
+
+    # avoid repeating same teammate pair (after cancel)
+    penalty_avoid = 0
+    pairA = tuple(sorted([teamA[0]["id"], teamA[1]["id"]]))
+    pairB = tuple(sorted([teamB[0]["id"], teamB[1]["id"]]))
+    if pairA in avoid_blocked:
+        penalty_avoid += 5000
+    if pairB in avoid_blocked:
+        penalty_avoid += 5000
+
+    # special unfairness: 2000+200 vs 1100+1100 -> within too large
+    carry_penalty = 0
+    if max_within >= 700:   # soft rule
+        carry_penalty += (max_within - 700) * 3
+
+    # waiting priority: bigger waits => lower score
+    wait_sum = sum(waits.values())
+
+    score = (-1.0 * wait_sum) + (2.0 * sum_diff) + (1.2 * within) + (1.5 * max_within) + penalty_avoid + carry_penalty
+    return score, {"sum_diff": sum_diff, "within": within, "max_within": max_within}
+
+def _pick_best_match(db, pool, must_include_id=None):
+    avoid_blocked = _avoid_pairs(db)
+    now = now_ts()
+
+    # ensure waiting values
+    waits = {}
+    for p in pool:
+        qjt = float(p.get("queue_join_time", now))
+        waits[p["id"]] = max(0.0, now - qjt)
+
+    # generate candidate groups of 4
+    best = None
+    best_meta = None
+
+    ids = [p["id"] for p in pool]
+    # brute force combos of 4 (pool small: <= 10)
+    n = len(pool)
+    for i in range(n):
+        for j in range(i+1, n):
+            for k in range(j+1, n):
+                for l in range(k+1, n):
+                    group = [pool[i], pool[j], pool[k], pool[l]]
+                    gids = set([p["id"] for p in group])
+                    if must_include_id and must_include_id not in gids:
+                        continue
+                    if not _pair_constraints_ok(group):
+                        continue
+
+                    # Evaluate best split respecting pair locks
+                    for teamA, teamB in _team_splits_for_four(group):
+                        if not _respects_pair_lock(teamA, teamB):
+                            continue
+                        score, meta = _score_split(teamA, teamB, {pid: waits[pid] for pid in gids}, avoid_blocked)
+                        if best is None or score < best:
+                            best = score
+                            best_meta = {"teamA": teamA, "teamB": teamB, "score": score, "meta": meta}
+    return best_meta
+
+def _create_match_on_court(db, court_id: str, source: str = "auto"):
+    if not db["system_settings"].get("is_session_active"):
+        return {"ok": False, "reason": "session_inactive"}
+
+    cs = db["courts_state"]
+    if cs.get(court_id):
+        return {"ok": False, "reason": "court_full"}
+
+    queue = _eligible_queue(db)
+    if len(queue) < 4:
+        return {"ok": False, "reason": "not_enough_players"}
+
+    # waiting priority: must include oldest
+    oldest = queue[0]["id"]
+    pool = queue[:min(10, len(queue))]
+
+    best = _pick_best_match(db, pool, must_include_id=oldest)
+    if not best:
+        # fallback: just take oldest 4 with simple split
+        group = pool[:4]
+        teamA, teamB = group[:2], group[2:]
+    else:
+        teamA, teamB = best["teamA"], best["teamB"]
+
+    match_id = str(uuid.uuid4())[:8]
+    countdown_start = now_ts()
+    scheduled_start = countdown_start + 60  # 1 minute to "ลงสนาม"
+
+    match = {
+        "match_id": match_id,
+        "state": "countdown",         # countdown -> playing
+        "source": source,
+        "created_at": countdown_start,
+        "countdown_start": countdown_start,
+        "scheduled_start": scheduled_start,
+        "start_time": None,
+        "team_a_ids": [p["id"] for p in teamA],
+        "team_b_ids": [p["id"] for p in teamB],
+        "team_a": [p.get("nickname", "") for p in teamA],
+        "team_b": [p.get("nickname", "") for p in teamB],
+    }
+
+    # set players to playing (but timer starts after countdown)
+    for p in teamA + teamB:
+        uid = p["id"]
+        db["players"][uid]["status"] = "playing"
+        # ensure participant list
+        _ensure_participant(db, uid)
+
+    cs[court_id] = match
+    db["courts_state"] = cs
+    return {"ok": True, "match_id": match_id, "court_id": court_id}
+
+def _tick_courts(db):
+    """
+    - advance countdown -> playing
+    - auto-match free courts if enabled
+    """
+    _refresh_courts_storage(db)
+    _cleanup_resting(db)
+    _compute_suggested_cooldown_min(db)
+
+    now = now_ts()
     changed = False
-    for cid in sorted(db["courts_state"].keys(), key=lambda x: int(x)):
-        if try_automatch_for_court(db, cid):
-            changed = True
+
+    # advance countdown
+    for cid, m in db["courts_state"].items():
+        if not m:
+            continue
+        if m.get("state") == "countdown":
+            if now >= float(m.get("scheduled_start", now)):
+                m["state"] = "playing"
+                m["start_time"] = float(m.get("scheduled_start", now))
+                db["courts_state"][cid] = m
+                changed = True
+
+    # auto-match on free courts
+    if db["system_settings"].get("is_session_active"):
+        for cid in sorted(db["courts_state"].keys(), key=lambda x: int(x)):
+            if db["courts_state"].get(cid) is None and db["system_settings"]["auto_match_courts"].get(cid):
+                # try to create match
+                res = _create_match_on_court(db, cid, source="auto")
+                if res.get("ok"):
+                    changed = True
+
     return changed
 
-def first_empty_non_auto_court(db):
-    refresh_courts(db)
-    cam = db["system_settings"].get("court_automatch", {})
-    # prefer courts with automatch OFF
-    for cid in sorted(db["courts_state"].keys(), key=lambda x: int(x)):
-        if db["courts_state"][cid] is None and (not cam.get(str(cid), False)):
-            return cid
-    # fallback any empty
-    for cid in sorted(db["courts_state"].keys(), key=lambda x: int(x)):
-        if db["courts_state"][cid] is None:
-            return cid
-    return None
+# --- RESULT / MMR ---
+def _elo_expected(rA, rB):
+    return 1.0 / (1.0 + 10 ** ((rB - rA) / 400.0))
 
-# ---------------- ROUTES ----------------
+def _score_factor_from_sets(cfg, sets, winner_team):
+    # incorporates set diff + point diff as tie-breaker influence, but kept moderate
+    target = int(cfg.get("target_points", 21) or 21)
+    a_sets = 0
+    b_sets = 0
+    a_pts = 0
+    b_pts = 0
+    for s in sets:
+        a = int(s.get("a", 0) or 0)
+        b = int(s.get("b", 0) or 0)
+        a_pts += a
+        b_pts += b
+        if a > b:
+            a_sets += 1
+        else:
+            b_sets += 1
+    set_diff = abs(a_sets - b_sets)
+    pt_diff = abs(a_pts - b_pts)
+
+    # base factor
+    g = 1.0 + 0.12 * set_diff + 0.08 * (pt_diff / max(1, target))
+    # keep sane
+    g = max(0.80, min(1.60, g))
+    return g, {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+
+def _validate_set_score(cfg, a, b):
+    """
+    Valid badminton:
+    - winner must reach target_points (11 or 21)
+    - win by 2 unless reaches 30 cap
+    - cap at 30 (30-x) allowed
+    """
+    target = int(cfg.get("target_points", 21) or 21)
+    cap = 30
+    a = int(a); b = int(b)
+    if a < 0 or b < 0:
+        return False, "คะแนนติดลบไม่ได้"
+    if a == b:
+        return False, "คะแนนห้ามเท่ากัน"
+    hi = max(a, b)
+    lo = min(a, b)
+    if hi > cap:
+        return False, "แต้มเกิน 30 ไม่ได้"
+    if hi < target:
+        return False, f"ผู้ชนะต้องถึง {target} แต้ม"
+    if hi == cap:
+        # cap reached -> always allowed if winner reached 30
+        return True, None
+    # hi >= target and hi < cap: must lead by 2
+    if (hi - lo) < 2:
+        return False, "ต้องชนะห่าง 2 แต้ม (ยกเว้นถึง 30)"
+    return True, None
+
+def _winner_from_sets(cfg, sets):
+    bo = int(cfg.get("bo", 1) or 1)
+    a_sets = 0
+    b_sets = 0
+    a_pts = 0
+    b_pts = 0
+    for s in sets:
+        a = int(s.get("a", 0) or 0)
+        b = int(s.get("b", 0) or 0)
+        a_pts += a
+        b_pts += b
+        if a > b:
+            a_sets += 1
+        else:
+            b_sets += 1
+
+    if bo == 1:
+        return ("A" if a_sets > b_sets else "B"), {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+    if bo == 3:
+        return ("A" if a_sets >= 2 else "B"), {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+
+    # bo2: play 2 sets always. If tie 1-1, decide by total points
+    if a_sets != b_sets:
+        return ("A" if a_sets > b_sets else "B"), {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+    # tie sets -> total points
+    if a_pts != b_pts:
+        return ("A" if a_pts > b_pts else "B"), {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+    # rare tie -> last set winner
+    last = sets[-1]
+    return ("A" if int(last.get("a", 0)) > int(last.get("b", 0)) else "B"), {"a_sets": a_sets, "b_sets": b_sets, "a_pts": a_pts, "b_pts": b_pts}
+
+def _apply_mmr_and_stats(db, match, cfg, sets, winner_team, duration_sec):
+    # team ratings use average mmr
+    a_ids = match["team_a_ids"]
+    b_ids = match["team_b_ids"]
+
+    teamA = [db["players"][uid] for uid in a_ids if uid in db["players"]]
+    teamB = [db["players"][uid] for uid in b_ids if uid in db["players"]]
+
+    if len(teamA) != 2 or len(teamB) != 2:
+        return None, "ผู้เล่นในแมตช์ไม่ครบ"
+
+    rA = sum([int(p.get("mmr", 1000) or 1000) for p in teamA]) / 2.0
+    rB = sum([int(p.get("mmr", 1000) or 1000) for p in teamB]) / 2.0
+    expA = _elo_expected(rA, rB)
+    expB = 1.0 - expA
+
+    g, meta = _score_factor_from_sets(cfg, sets, winner_team)
+    baseK_ranked = 25.0
+
+    # compute per-player K (unranked calibrate more volatile)
+    def player_k(p):
+        cg = int(p.get("calibrate_games", 0) or 0)
+        if cg >= 10:
+            return baseK_ranked
+        # bigger early, smaller later
+        return 40.0 + 4.0 * (10 - cg)  # game1=76 -> ... -> game9=44
+
+    # actual results
+    actA = 1.0 if winner_team == "A" else 0.0
+    actB = 1.0 - actA
+
+    # team deltas (for logging only)
+    team_deltaA = (baseK_ranked * g) * (actA - expA)
+    team_deltaB = (baseK_ranked * g) * (actB - expB)
+
+    # apply per player
+    snapshot = {}
+    for p in teamA:
+        k = player_k(p) * g
+        delta = k * (actA - expA)
+        delta_i = int(round(delta))
+        p["mmr"] = int(p.get("mmr", 1000) or 1000) + delta_i
+        snapshot[p["id"]] = {"delta": delta_i}
+    for p in teamB:
+        k = player_k(p) * g
+        delta = k * (actB - expB)
+        delta_i = int(round(delta))
+        p["mmr"] = int(p.get("mmr", 1000) or 1000) + delta_i
+        snapshot[p["id"]] = {"delta": delta_i}
+
+    # set-based stats + points
+    a_sets = meta["a_sets"]
+    b_sets = meta["b_sets"]
+    a_pts = meta["a_pts"]
+    b_pts = meta["b_pts"]
+
+    # each set is a win/loss for stats (as requested)
+    for uid in a_ids:
+        if uid in db["players"]:
+            db["players"][uid]["sets_w"] += a_sets
+            db["players"][uid]["sets_l"] += b_sets
+            db["players"][uid]["pts_for"] += a_pts
+            db["players"][uid]["pts_against"] += b_pts
+    for uid in b_ids:
+        if uid in db["players"]:
+            db["players"][uid]["sets_w"] += b_sets
+            db["players"][uid]["sets_l"] += a_sets
+            db["players"][uid]["pts_for"] += b_pts
+            db["players"][uid]["pts_against"] += a_pts
+
+    # calibrate progress is per match
+    for uid in a_ids + b_ids:
+        if uid in db["players"]:
+            p = db["players"][uid]
+            cg = int(p.get("calibrate_games", 0) or 0)
+            if cg < 10:
+                p["calibrate_games"] = cg + 1
+                # win/loss during calibrate (match-based)
+                if (winner_team == "A" and uid in a_ids) or (winner_team == "B" and uid in b_ids):
+                    p["calibrate_wins"] = int(p.get("calibrate_wins", 0) or 0) + 1
+                else:
+                    p["calibrate_losses"] = int(p.get("calibrate_losses", 0) or 0) + 1
+
+    return {"snapshot": snapshot, "meta": meta, "team_deltaA": team_deltaA, "team_deltaB": team_deltaB}, None
+
+# --- ROUTES ---
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -726,7 +788,6 @@ def index():
 def api_login():
     try:
         db = get_db()
-        refresh_courts(db)
         d = request.json or {}
         uid = d.get("userId")
         if not uid:
@@ -735,9 +796,12 @@ def api_login():
         if uid not in db["players"]:
             db["players"][uid] = {
                 "id": uid,
-                "nickname": d.get("displayName") or "User",
-                "pictureUrl": d.get("pictureUrl") or "",
+                "nickname": d.get("displayName", "User"),
+                "pictureUrl": d.get("pictureUrl", ""),
                 "mmr": 1000,
+                "calibrate_games": 0,
+                "calibrate_wins": 0,
+                "calibrate_losses": 0,
                 "status": "offline",
                 "last_active": now_ts(),
                 "queue_join_time": None,
@@ -747,390 +811,565 @@ def api_login():
                 "outgoing_request_to": None,
                 "incoming_requests": [],
                 "pair_lock": None,
-                "calibrate_games": 0
+                "sets_w": 0, "sets_l": 0, "pts_for": 0, "pts_against": 0
             }
             log(f"New user: {db['players'][uid]['nickname']}")
         else:
-            db["players"][uid]["pictureUrl"] = d.get("pictureUrl") or db["players"][uid].get("pictureUrl", "")
-            if d.get("displayName"):
-                db["players"][uid]["nickname"] = d.get("displayName")
+            db["players"][uid]["nickname"] = d.get("displayName", db["players"][uid].get("nickname", "User"))
+            db["players"][uid]["pictureUrl"] = d.get("pictureUrl", db["players"][uid].get("pictureUrl", ""))
 
+        db["players"][uid]["last_active"] = now_ts()
         save_db(db)
-        p = db["players"][uid]
-        role = "super" if is_super(uid) else ("mod" if uid in db.get("mod_ids", []) else "user")
 
-        # minimal response
-        return jsonify({
-            "id": p["id"],
-            "nickname": p["nickname"],
+        p = db["players"][uid]
+        role = "super" if uid == SUPER_ADMIN_ID else ("mod" if uid in db["mod_ids"] else "user")
+        rb1, rb2 = get_rank_badges(p)
+        resp = {
+            "id": uid,
+            "nickname": p.get("nickname", ""),
             "pictureUrl": p.get("pictureUrl", ""),
-            "role": role
-        })
+            "role": role,
+            "status": p.get("status", "offline"),
+            "resting": bool(p.get("resting")),
+            "auto_rest": bool(p.get("auto_rest")),
+            "pair_lock": p.get("pair_lock"),
+            "outgoing_request_to": p.get("outgoing_request_to"),
+            "incoming_requests": p.get("incoming_requests", []),
+            "mmr_display": mmr_display(p),
+            "rank_title": rank_title_set_a(int(p.get("mmr", 1000) or 1000)),
+            "rank_badge": rb1,
+            "rank_badge2": rb2,
+            "wr_badge": get_wr_badge(p),
+            "progress": progress_info(p),
+            "stats": {
+                "sets_w": int(p.get("sets_w", 0) or 0),
+                "sets_l": int(p.get("sets_l", 0) or 0),
+                "pts_for": int(p.get("pts_for", 0) or 0),
+                "pts_against": int(p.get("pts_against", 0) or 0),
+                "wr": winrate_percent(p)  # None ok
+            }
+        }
+        return jsonify(resp)
     except Exception as e:
-        log(f"Login error: {e}")
+        log(f"login error: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/get_dashboard")
-def api_get_dashboard():
-    """
-    Optional query: uid=... to enrich "me" data and my history
-    """
+@app.route("/api/get_dashboard", methods=["GET"])
+def api_dashboard():
     try:
         db = get_db()
-        refresh_courts(db)
-        clean_expired_avoid_pairs(db)
+        changed = _tick_courts(db)
+        if changed:
+            save_db(db)
 
-        uid = request.args.get("uid")
+        ss = db["system_settings"]
+        cfg = ss.get("session_config", {})
+        now = now_ts()
 
-        # opportunistic automatch (safe): if any court automatch ON and empty, try
-        # (helps when no one triggers explicit call)
-        if db["system_settings"].get("is_session_active"):
-            # only run if at least one court automatch is on
-            if any(db["system_settings"].get("court_automatch", {}).values()):
-                changed = try_automatch_all(db)
-                if changed:
-                    save_db(db)
-
-        t = now_ts()
-
-        # enrich courts with elapsed / countdown
+        # courts payload
         courts = {}
         for cid, m in db["courts_state"].items():
-            if m:
-                start_at = float(m.get("start_at", m.get("created_at", t)))
-                if t < start_at:
-                    m_view = dict(m)
-                    m_view["state"] = "countdown"
-                    m_view["starts_in_sec"] = int(max(0, start_at - t))
-                    m_view["elapsed_sec"] = 0
-                else:
-                    m_view = dict(m)
-                    m_view["state"] = "live"
-                    m_view["starts_in_sec"] = 0
-                    m_view["elapsed_sec"] = int(t - start_at)
-
-                # attach player data
-                def pack_team(ids):
-                    out = []
-                    for pid in ids:
-                        pl = db["players"].get(pid)
-                        if pl:
-                            out.append({"id": pid, "nickname": pl["nickname"], "pictureUrl": pl.get("pictureUrl", "")})
-                    return out
-
-                m_view["team_a_data"] = pack_team(m.get("team_a_ids", []))
-                m_view["team_b_data"] = pack_team(m.get("team_b_ids", []))
-                courts[cid] = m_view
-            else:
+            if not m:
                 courts[cid] = None
+                continue
 
-        # players minimal + queue list (active + playing)
+            # build team data (name, pic, rank badges)
+            team_a_data = []
+            for uid in m.get("team_a_ids", []):
+                if uid in db["players"]:
+                    pl = db["players"][uid]
+                    rb1, rb2 = get_rank_badges(pl)
+                    team_a_data.append({
+                        "id": uid,
+                        "name": pl.get("nickname", ""),
+                        "pic": pl.get("pictureUrl", ""),
+                        "rank_badge": rb1,
+                        "rank_badge2": rb2
+                    })
+            team_b_data = []
+            for uid in m.get("team_b_ids", []):
+                if uid in db["players"]:
+                    pl = db["players"][uid]
+                    rb1, rb2 = get_rank_badges(pl)
+                    team_b_data.append({
+                        "id": uid,
+                        "name": pl.get("nickname", ""),
+                        "pic": pl.get("pictureUrl", ""),
+                        "rank_badge": rb1,
+                        "rank_badge2": rb2
+                    })
+
+            elapsed_sec = 0
+            starts_in_sec = 0
+            if m.get("state") == "countdown":
+                starts_in_sec = max(0, int(round(float(m.get("scheduled_start", now)) - now)))
+            else:
+                st = m.get("start_time")
+                if st:
+                    elapsed_sec = max(0, int(round(now - float(st))))
+
+            courts[cid] = {
+                "match_id": m.get("match_id"),
+                "state": m.get("state"),
+                "team_a": m.get("team_a", []),
+                "team_b": m.get("team_b", []),
+                "team_a_ids": m.get("team_a_ids", []),
+                "team_b_ids": m.get("team_b_ids", []),
+                "team_a_data": team_a_data,
+                "team_b_data": team_b_data,
+                "elapsed_sec": elapsed_sec,
+                "starts_in_sec": starts_in_sec,
+                "auto_match": bool(ss.get("auto_match_courts", {}).get(cid, False))
+            }
+
+        # queue list with waiting minutes
+        queue = []
+        for p in db["players"].values():
+            if p.get("status") not in ["active", "playing"]:
+                continue
+            qjt = p.get("queue_join_time")
+            wait_min = 0
+            if qjt:
+                wait_min = int((now - float(qjt)) // 60)
+            rb1, rb2 = get_rank_badges(p)
+            queue.append({
+                "id": p["id"],
+                "nickname": p.get("nickname", ""),
+                "pictureUrl": p.get("pictureUrl", ""),
+                "status": p.get("status", "offline"),
+                "waiting_min": wait_min,
+                "resting": bool(p.get("resting")),
+                "pair_lock": p.get("pair_lock"),
+                "rank_badge": rb1,
+                "rank_badge2": rb2,
+                "rank_title": rank_title_set_a(int(p.get("mmr", 1000) or 1000)),
+                "mmr_display": mmr_display(p)  # will show UNRANK(...) if needed
+            })
+        # sort queue: active first by join time; playing after
+        def _qkey(x):
+            # active first
+            st = 0 if x["status"] == "active" else 1
+            return (st, -x["waiting_min"])
+        queue.sort(key=_qkey)
+
+        # all players minimal (for mod panels, profile list)
         all_players = []
         for p in db["players"].values():
-            status = p.get("status", "offline")
-            qjt = p.get("queue_join_time")
-            wait_min = int((t - float(qjt)) / 60) if isinstance(qjt, (int, float)) and status == "active" else 0
-
+            rb1, rb2 = get_rank_badges(p)
             all_players.append({
                 "id": p["id"],
-                "nickname": p["nickname"],
+                "nickname": p.get("nickname", ""),
                 "pictureUrl": p.get("pictureUrl", ""),
-                "status": status,
-                "wait_min": wait_min,
-                "resting": bool(p.get("resting")),
-                "auto_rest": bool(p.get("auto_rest")),
-                "outgoing_request_to": p.get("outgoing_request_to"),
-                "incoming_requests": p.get("incoming_requests", []),
-                "pair_lock": p.get("pair_lock"),
-                "is_mod": (p["id"] in db.get("mod_ids", [])) or is_super(p["id"]),
-                "is_unranked": is_unranked(p),
-                "rank_text": display_rank_text(p),
-                # do not expose mmr if unranked (frontend should not show)
-                "mmr": int(p.get("mmr", 1000)) if not is_unranked(p) else None
-            })
-
-        # queue = active only (exclude playing/offline). resting stay in list but flagged
-        queue = [x for x in all_players if x["status"] == "active"]
-        queue.sort(key=lambda x: x["wait_min"], reverse=True)  # longest wait first display
-        queue_count = len([x for x in queue if not x["resting"]])
-
-        # histories
-        def enrich_match(m):
-            def pack_ids(ids):
-                arr = []
-                for pid in ids:
-                    pl = db["players"].get(pid)
-                    if pl:
-                        arr.append({"id": pid, "nickname": pl["nickname"], "pictureUrl": pl.get("pictureUrl", "")})
-                return arr
-            mm = dict(m)
-            mm["team_a_data"] = pack_ids(m.get("team_a_ids", []))
-            mm["team_b_data"] = pack_ids(m.get("team_b_ids", []))
-            return mm
-
-        global_hist = [enrich_match(m) for m in db.get("match_history", [])[:50]]
-
-        my_hist = []
-        if uid and uid in db["players"]:
-            for m in db.get("match_history", []):
-                if m.get("status") != "completed":
-                    continue
-                if uid in m.get("team_a_ids", []) or uid in m.get("team_b_ids", []):
-                    my_hist.append(enrich_match(m))
-                if len(my_hist) >= 50:
-                    break
-
-        # leaderboards (3 tabs) with unranked always at bottom
-        def leaderboard_rows():
-            rows = []
-            for p in db["players"].values():
-                st = compute_player_stats(db, p["id"])
-                rows.append({
-                    "id": p["id"],
-                    "nickname": p["nickname"],
-                    "pictureUrl": p.get("pictureUrl", ""),
-                    "is_unranked": is_unranked(p),
-                    "rank_text": display_rank_text(p),
-                    "mmr": int(p.get("mmr", 1000)),
-                    "points_for_total": int(st["points_for_total"]),
-                    "points_against_total": int(st["points_against_total"]),
-                    "point_diff_total": int(st["point_diff_total"]),
-                    "set_winrate": int(st["set_winrate"]),
-                    "sets_won": int(st["sets_won"]),
-                    "sets_lost": int(st["sets_lost"])
-                })
-            return rows
-
-        rows = leaderboard_rows()
-
-        def bucket_key(r):
-            return 1 if r["is_unranked"] else 0  # ranked first
-
-        # MMR board: mmr desc, tie diff, points_for, winrate
-        lb_mmr = sorted(rows, key=lambda r: (
-            bucket_key(r),
-            -r["mmr"],
-            -r["point_diff_total"],
-            -r["points_for_total"],
-            -r["set_winrate"],
-            -(r["sets_won"])
-        ))
-
-        # POINTS board: points_for desc, tie diff, winrate, mmr
-        lb_points = sorted(rows, key=lambda r: (
-            bucket_key(r),
-            -r["points_for_total"],
-            -r["point_diff_total"],
-            -r["set_winrate"],
-            -r["mmr"]
-        ))
-
-        # WINRATE board: winrate desc, tie sets_won, diff, mmr
-        lb_winrate = sorted(rows, key=lambda r: (
-            bucket_key(r),
-            -r["set_winrate"],
-            -(r["sets_won"]),
-            -r["point_diff_total"],
-            -r["mmr"]
-        ))
-
-        # events (sessions) with participants (for billing)
-        events = []
-        for eid, e in db.get("events", {}).items():
-            ev = dict(e)
-            # participants data
-            participants = []
-            for pid in e.get("participants", []):
-                pl = db["players"].get(pid)
-                if pl:
-                    participants.append({
-                        "id": pid,
-                        "nickname": pl["nickname"],
-                        "pictureUrl": pl.get("pictureUrl", ""),
-                        "is_unranked": is_unranked(pl),
-                        "rank_text": display_rank_text(pl)
-                    })
-            ev["participants_data"] = participants
-            events.append(ev)
-        # sort newest first by start_time
-        events.sort(key=lambda x: float(x.get("start_time", 0)), reverse=True)
-
-        me = None
-        if uid and uid in db["players"]:
-            p = db["players"][uid]
-            st = compute_player_stats(db, uid)
-            me = {
-                "id": uid,
-                "nickname": p["nickname"],
-                "pictureUrl": p.get("pictureUrl", ""),
-                "role": "super" if is_super(uid) else ("mod" if uid in db.get("mod_ids", []) else "user"),
                 "status": p.get("status", "offline"),
                 "resting": bool(p.get("resting")),
                 "auto_rest": bool(p.get("auto_rest")),
-                "outgoing_request_to": p.get("outgoing_request_to"),
-                "incoming_requests": p.get("incoming_requests", []),
                 "pair_lock": p.get("pair_lock"),
-                "rank_text": display_rank_text(p),
-                "is_unranked": is_unranked(p),
-                "mmr": int(p.get("mmr", 1000)) if not is_unranked(p) else None,
-                "calibrate_games": int(p.get("calibrate_games", 0)),
-                "stats": st
+                "mmr_display": mmr_display(p),
+                "rank_title": rank_title_set_a(int(p.get("mmr", 1000) or 1000)),
+                "rank_badge": rb1,
+                "rank_badge2": rb2,
+                "wr_badge": get_wr_badge(p),
+                "sets_w": int(p.get("sets_w", 0) or 0),
+                "sets_l": int(p.get("sets_l", 0) or 0),
+                "pts_for": int(p.get("pts_for", 0) or 0),
+                "pts_against": int(p.get("pts_against", 0) or 0),
+                "is_mod": p["id"] in db["mod_ids"]
+            })
+
+        # leaderboards (mmr / points / winrate) with unranked always at bottom
+        ranked = []
+        unranked = []
+        for p in db["players"].values():
+            (unranked if _is_unranked(p) else ranked).append(p)
+
+        lb_mmr = sorted(ranked, key=lambda x: int(x.get("mmr", 1000) or 1000), reverse=True) + \
+                 sorted(unranked, key=lambda x: int(x.get("mmr", 1000) or 1000), reverse=True)
+
+        lb_points = sorted(ranked, key=lambda x: int(x.get("pts_for", 0) or 0), reverse=True) + \
+                    sorted(unranked, key=lambda x: int(x.get("pts_for", 0) or 0), reverse=True)
+
+        def wr_val(p):
+            wr = winrate_percent(p)
+            return -1 if wr is None else wr
+
+        lb_wr = sorted(ranked, key=lambda x: wr_val(x), reverse=True) + \
+                sorted(unranked, key=lambda x: wr_val(x), reverse=True)
+
+        def _pack_lb(p):
+            rb1, rb2 = get_rank_badges(p)
+            return {
+                "id": p["id"],
+                "nickname": p.get("nickname", ""),
+                "pictureUrl": p.get("pictureUrl", ""),
+                "mmr_display": mmr_display(p),
+                "rank_title": rank_title_set_a(int(p.get("mmr", 1000) or 1000)),
+                "rank_badge": rb1,
+                "rank_badge2": rb2,
+                "wr_badge": get_wr_badge(p),
+                "pts_for": int(p.get("pts_for", 0) or 0),
+                "wr": winrate_percent(p),
+                "sets_w": int(p.get("sets_w", 0) or 0),
+                "sets_l": int(p.get("sets_l", 0) or 0)
             }
 
+        # history (global)
+        history = []
+        for m in db.get("match_history", [])[:30]:
+            history.append(m)
+
+        # events (for list/billing)
+        event_list = []
+        for eid, e in db.get("events", {}).items():
+            event_list.append(e)
+        # sort by datetime desc
+        event_list.sort(key=lambda x: float(x.get("datetime", 0) or 0), reverse=True)
+
         return jsonify({
-            "system": db["system_settings"],
+            "system": {
+                "total_courts": ss.get("total_courts", 2),
+                "is_session_active": bool(ss.get("is_session_active")),
+                "current_event_id": ss.get("current_event_id"),
+                "session_config": cfg,
+                "auto_match_courts": ss.get("auto_match_courts", {}),
+                "suggested_cooldown_min": ss.get("suggested_cooldown_min", 0)
+            },
             "courts": courts,
-            "queue": queue,
-            "queue_count": queue_count,
+            "queue": [q for q in queue if q["status"] == "active"],  # waiting list
+            "queue_count": len([q for q in queue if q["status"] == "active"]),
+            "playing_count": len([q for q in queue if q["status"] == "playing"]),
             "all_players": all_players,
             "leaderboards": {
-                "mmr": lb_mmr,
-                "points": lb_points,
-                "winrate": lb_winrate
+                "mmr": [_pack_lb(p) for p in lb_mmr],
+                "points": [_pack_lb(p) for p in lb_points],
+                "wr": [_pack_lb(p) for p in lb_wr]
             },
-            "history": {
-                "global": global_hist,
-                "my": my_hist
-            },
-            "events": events[:30],
-            "me": me,
-            "avg_match_minutes_10": compute_avg_match_minutes(db)
+            "history": history,
+            "events": event_list
         })
     except Exception as e:
-        log(f"Dashboard error: {e}")
+        log(f"dashboard error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ---------------- SESSION CONTROL ----------------
+# --- STATUS / REST ---
+@app.route("/api/toggle_status", methods=["POST"])
+def api_toggle_status():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+
+    p = db["players"][uid]
+    if not db["system_settings"].get("is_session_active"):
+        return jsonify({"error": "Session not active"}), 400
+
+    curr = p.get("status", "offline")
+    if curr in ["active", "playing"]:
+        # going offline resets queue time (as requested)
+        p["status"] = "offline"
+        p["queue_join_time"] = None
+        p["resting"] = False
+        p["rest_until"] = None
+        # clear pairing state
+        _clear_pairing_state_on_offline(db, uid)
+    else:
+        p["status"] = "active"
+        p["queue_join_time"] = now_ts()
+        p["last_active"] = now_ts()
+        # keep resting false
+        p["resting"] = False
+        p["rest_until"] = None
+        _ensure_participant(db, uid)
+
+    save_db(db)
+    return jsonify({"success": True, "status": p["status"]})
+
+@app.route("/api/rest_toggle", methods=["POST"])
+def api_rest_toggle():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    p = db["players"][uid]
+    if p.get("status") != "active":
+        return jsonify({"error": "ต้อง Check-in ก่อน"}), 400
+
+    # toggle resting (waiting time still continues; we do not change queue_join_time)
+    if p.get("resting"):
+        p["resting"] = False
+        p["rest_until"] = None
+    else:
+        p["resting"] = True
+        p["rest_until"] = None
+    save_db(db)
+    return jsonify({"success": True, "resting": bool(p.get("resting"))})
+
+@app.route("/api/auto_rest_toggle", methods=["POST"])
+def api_auto_rest_toggle():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    p = db["players"][uid]
+    p["auto_rest"] = not bool(p.get("auto_rest"))
+    save_db(db)
+    return jsonify({"success": True, "auto_rest": bool(p.get("auto_rest"))})
+
+# --- PAIR REQUESTS ---
+@app.route("/api/pair/request", methods=["POST"])
+def api_pair_request():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    target = d.get("targetId")
+    if not uid or not target:
+        return jsonify({"error": "Missing"}), 400
+    if uid not in db["players"] or target not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if uid == target:
+        return jsonify({"error": "ขอตัวเองไม่ได้"}), 400
+    if not db["system_settings"].get("is_session_active"):
+        return jsonify({"error": "Session not active"}), 400
+
+    sender = db["players"][uid]
+    recv = db["players"][target]
+
+    if sender.get("status") != "active":
+        return jsonify({"error": "ต้อง Check-in ก่อน"}), 400
+
+    if sender.get("pair_lock"):
+        return jsonify({"error": "คุณจับคู่แล้ว (ยกเลิกก่อน)"}), 400
+
+    if sender.get("outgoing_request_to") and sender.get("outgoing_request_to") != target:
+        return jsonify({"error": "คุณส่งคำขออยู่แล้ว (ยกเลิกก่อน)"}), 400
+
+    # requester can request only one person
+    if sender.get("outgoing_request_to") == target:
+        return jsonify({"success": True})
+
+    sender["outgoing_request_to"] = target
+    recv.setdefault("incoming_requests", [])
+    if uid not in recv["incoming_requests"]:
+        recv["incoming_requests"].append(uid)
+
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/pair/cancel_outgoing", methods=["POST"])
+def api_pair_cancel_outgoing():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    _cancel_outgoing(db, uid)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/pair/accept", methods=["POST"])
+def api_pair_accept():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")     # receiver
+    from_id = d.get("fromId") # requester
+    if not uid or not from_id:
+        return jsonify({"error": "Missing"}), 400
+    if uid not in db["players"] or from_id not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+
+    receiver = db["players"][uid]
+    sender = db["players"][from_id]
+
+    if receiver.get("pair_lock"):
+        return jsonify({"error": "คุณจับคู่แล้ว (ยกเลิกก่อน)"}), 400
+    if sender.get("pair_lock"):
+        return jsonify({"error": "อีกฝ่ายจับคู่แล้ว"}), 400
+
+    # receiver can receive many requests but accept only one
+    if from_id not in receiver.get("incoming_requests", []):
+        return jsonify({"error": "คำขอไม่พบแล้ว"}), 400
+
+    # if sender had outgoing request to someone else, cancel it (rule)
+    if sender.get("outgoing_request_to") and sender.get("outgoing_request_to") != uid:
+        _cancel_outgoing(db, from_id)
+
+    # if receiver has outgoing request to someone else and now accepts, cancel receiver outgoing too
+    if receiver.get("outgoing_request_to"):
+        _cancel_outgoing(db, uid)
+
+    # If sender requested receiver, accepting should also clear sender outgoing
+    _cancel_outgoing(db, from_id)
+
+    receiver["pair_lock"] = from_id
+    sender["pair_lock"] = uid
+
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/pair/cancel_pair", methods=["POST"])
+def api_pair_cancel_pair():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    _break_pair(db, uid)
+    save_db(db)
+    return jsonify({"success": True})
+
+@app.route("/api/pair/inbox", methods=["POST"])
+def api_pair_inbox():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    p = db["players"][uid]
+    inbox = []
+    for rid in p.get("incoming_requests", []):
+        if rid in db["players"]:
+            rp = db["players"][rid]
+            rb1, rb2 = get_rank_badges(rp)
+            inbox.append({
+                "id": rid,
+                "nickname": rp.get("nickname", ""),
+                "pictureUrl": rp.get("pictureUrl", ""),
+                "status": rp.get("status", "offline"),
+                "pair_lock": rp.get("pair_lock"),
+                "rank_badge": rb1,
+                "rank_badge2": rb2
+            })
+    # sort: active first
+    inbox.sort(key=lambda x: 0 if x["status"] == "active" else 1)
+    return jsonify({
+        "outgoing_request_to": p.get("outgoing_request_to"),
+        "pair_lock": p.get("pair_lock"),
+        "inbox": inbox
+    })
+
+# --- ADMIN / SESSION ---
 @app.route("/api/admin/toggle_session", methods=["POST"])
 def api_toggle_session():
     db = get_db()
-    refresh_courts(db)
     d = request.json or {}
     uid = d.get("userId")
     action = d.get("action")
-
-    if not is_mod(db, uid):
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
 
     if action == "start":
-        # config
-        cfg = db["system_settings"].get("session_config", {})
-        cfg["target_points"] = int(d.get("target_points", cfg.get("target_points", 21)))
-        cfg["bo"] = int(d.get("bo", cfg.get("bo", 1)))
-        cfg["ready_check"] = bool(d.get("ready_check", cfg.get("ready_check", False)))
-        cfg["notify_enabled"] = bool(d.get("notify_enabled", cfg.get("notify_enabled", False)))
-        db["system_settings"]["session_config"] = cfg
+        # session config
+        target_points = int(d.get("target_points", 21) or 21)
+        bo = int(d.get("bo", 1) or 1)
+        enable_notifications = bool(d.get("enable_notifications", False))
+
+        if target_points not in [11, 21]:
+            target_points = 21
+        if bo not in [1, 2, 3]:
+            bo = 1
 
         db["system_settings"]["is_session_active"] = True
+        db["system_settings"]["session_config"] = {
+            "target_points": target_points,
+            "bo": bo,
+            "enable_notifications": enable_notifications
+        }
+
+        # create new session event
         eid = str(uuid.uuid4())[:8]
-        today = datetime.now().strftime("%d/%m/%Y")
+        now = now_ts()
+        today = datetime.now().strftime("%d/%m/%Y %H:%M")
         db["events"][eid] = {
             "id": eid,
             "name": f"ก๊วน {today}",
+            "datetime": now,
             "status": "active",
-            "start_time": now_ts(),
-            "end_time": None,
-            "settings": cfg,
-            "participants": []  # IMPORTANT for billing
+            "participants": []
         }
         db["system_settings"]["current_event_id"] = eid
 
-        # clear courts
-        for cid in db["courts_state"]:
+        # reset courts state
+        _refresh_courts_storage(db)
+        for cid in db["courts_state"].keys():
             db["courts_state"][cid] = None
-
-        # reset player states for new session
-        for p in db["players"].values():
-            if p.get("status") != "offline":
-                p["status"] = "offline"
-            p["queue_join_time"] = None
-            p["resting"] = False
-            p["rest_until"] = None
-            # keep calibrate and mmr
-            # keep incoming requests
-            p["outgoing_request_to"] = None
-            p["pair_lock"] = None
-
-        save_db(db)
-        return jsonify({"success": True, "event_id": eid})
-
-    # end session
-    if action == "end":
-        db["system_settings"]["is_session_active"] = False
-        eid = db["system_settings"].get("current_event_id")
-        db["system_settings"]["current_event_id"] = None
-
-        if eid and eid in db["events"]:
-            db["events"][eid]["status"] = "closed"
-            db["events"][eid]["end_time"] = now_ts()
-
-        # clear courts and set everyone offline
-        for cid in db["courts_state"]:
-            db["courts_state"][cid] = None
-
-        for p in db["players"].values():
-            p["status"] = "offline"
-            p["queue_join_time"] = None
-            p["resting"] = False
-            p["rest_until"] = None
-            p["outgoing_request_to"] = None
-            p["pair_lock"] = None
 
         save_db(db)
         return jsonify({"success": True})
 
-    return jsonify({"error": "Invalid action"}), 400
+    # end session
+    db["system_settings"]["is_session_active"] = False
+    db["system_settings"]["current_event_id"] = None
+    # clear courts
+    for cid in db["courts_state"].keys():
+        db["courts_state"][cid] = None
+
+    # set everyone offline and clear queue/pairing
+    for p in db["players"].values():
+        if p.get("status") != "offline":
+            p["status"] = "offline"
+        p["queue_join_time"] = None
+        p["resting"] = False
+        p["rest_until"] = None
+        _clear_pairing_state_on_offline(db, p["id"])
+
+    save_db(db)
+    return jsonify({"success": True})
 
 @app.route("/api/admin/update_courts", methods=["POST"])
 def api_update_courts():
     db = get_db()
     d = request.json or {}
     uid = d.get("userId")
-    if not is_mod(db, uid):
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
-
-    count = int(d.get("count", 2))
-    count = max(1, min(8, count))
+    count = int(d.get("count", 2) or 2)
+    count = max(1, min(12, count))
     db["system_settings"]["total_courts"] = count
-    refresh_courts(db)
+    _refresh_courts_storage(db)
     save_db(db)
     return jsonify({"success": True})
 
-@app.route("/api/admin/toggle_automatch", methods=["POST"])
-def api_toggle_automatch():
+@app.route("/api/admin/toggle_auto_match", methods=["POST"])
+def api_toggle_auto_match():
     db = get_db()
-    refresh_courts(db)
     d = request.json or {}
     uid = d.get("userId")
-    if not is_mod(db, uid):
-        return jsonify({"error": "Unauthorized"}), 403
     cid = str(d.get("courtId"))
     enabled = bool(d.get("enabled"))
-    if cid not in db["system_settings"]["court_automatch"]:
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
+    _refresh_courts_storage(db)
+    if cid not in db["system_settings"]["auto_match_courts"]:
         return jsonify({"error": "Court not found"}), 404
-    db["system_settings"]["court_automatch"][cid] = enabled
+    db["system_settings"]["auto_match_courts"][cid] = enabled
     save_db(db)
     return jsonify({"success": True})
 
-# ---------------- MOD MANAGEMENT ----------------
 @app.route("/api/admin/manage_mod", methods=["POST"])
 def api_manage_mod():
     db = get_db()
     d = request.json or {}
-    if d.get("requesterId") != SUPER_ADMIN_ID:
+    uid = d.get("requesterId")
+    if uid != SUPER_ADMIN_ID:
         return jsonify({"error": "Super Admin Only"}), 403
-    tid = d.get("targetUserId")
+    target = d.get("targetUserId")
     action = d.get("action")
-    if not tid or tid not in db["players"]:
-        return jsonify({"error": "Target not found"}), 404
-
+    if not target or target not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
     if action == "promote":
-        if tid not in db["mod_ids"]:
-            db["mod_ids"].append(tid)
+        if target not in db["mod_ids"]:
+            db["mod_ids"].append(target)
     else:
-        if tid in db["mod_ids"]:
-            db["mod_ids"].remove(tid)
-
+        if target in db["mod_ids"]:
+            db["mod_ids"].remove(target)
     save_db(db)
     return jsonify({"success": True})
 
@@ -1139,496 +1378,299 @@ def api_set_mmr():
     db = get_db()
     d = request.json or {}
     uid = d.get("userId")
-    if not is_mod(db, uid):
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
-
-    tid = d.get("targetUserId")
+    target = d.get("targetUserId")
     new_mmr = d.get("newMmr")
-    force_ranked = bool(d.get("force_ranked", False))
-
-    if tid not in db["players"]:
-        return jsonify({"error": "Not found"}), 404
+    if not target or target not in db["players"]:
+        return jsonify({"error": "Target not found"}), 404
     try:
-        nm = int(new_mmr)
+        db["players"][target]["mmr"] = int(new_mmr)
+        # If mod edits mmr, we consider ranked (optional) -> keep as-is; do NOT force calibrate finish.
+        save_db(db)
+        return jsonify({"success": True})
     except:
         return jsonify({"error": "Invalid MMR"}), 400
 
-    db["players"][tid]["mmr"] = nm
-    if force_ranked:
-        db["players"][tid]["calibrate_games"] = 10
-
-    save_db(db)
-    return jsonify({"success": True})
-
-# ---------------- PLAYER STATE ----------------
-@app.route("/api/toggle_status", methods=["POST"])
-def api_toggle_status():
+# --- MATCHMAKE BUTTONS ---
+@app.route("/api/matchmake/run", methods=["POST"])
+def api_matchmake_run():
     db = get_db()
     d = request.json or {}
     uid = d.get("userId")
     if not uid or uid not in db["players"]:
         return jsonify({"error": "User not found"}), 404
-
-    if not db["system_settings"].get("is_session_active"):
-        return jsonify({"error": "Session not active"}), 400
-
-    p = db["players"][uid]
-    curr = p.get("status", "offline")
-    t = now_ts()
-
-    if curr == "offline":
-        # check-in
-        p["status"] = "active"
-        p["queue_join_time"] = t
-        p["last_active"] = t
-        p["resting"] = False
-        p["rest_until"] = None
-
-        # add to current event participants
-        eid = db["system_settings"].get("current_event_id")
-        if eid and eid in db["events"]:
-            parts = db["events"][eid].get("participants", [])
-            if uid not in parts:
-                parts.append(uid)
-            db["events"][eid]["participants"] = parts
-
-    elif curr == "active":
-        # check-out
-        # warn handled on frontend; here we reset wait time and clear pairing/outgoing
-        p["status"] = "offline"
-        p["queue_join_time"] = None
-        p["resting"] = False
-        p["rest_until"] = None
-
-        # cancel outgoing request
-        cancel_outgoing(db, uid)
-        # unpair if paired
-        unpair(db, uid)
-
-    elif curr == "playing":
-        return jsonify({"error": "กำลังแข่งอยู่"}), 400
-
-    save_db(db)
-    return jsonify({"success": True})
-
-@app.route("/api/toggle_rest", methods=["POST"])
-def api_toggle_rest():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    if uid not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-    p = db["players"][uid]
-    if p.get("status") != "active":
-        return jsonify({"error": "ต้องอยู่สถานะรอคิว"}), 400
-
-    # toggle resting (manual rest)
-    if p.get("resting"):
-        p["resting"] = False
-        p["rest_until"] = None
-    else:
-        p["resting"] = True
-        p["rest_until"] = None
-
-    save_db(db)
-    return jsonify({"success": True})
-
-@app.route("/api/toggle_auto_rest", methods=["POST"])
-def api_toggle_auto_rest():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    if uid not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-    p = db["players"][uid]
-    if p.get("status") == "offline":
-        return jsonify({"error": "ต้อง check-in ก่อน"}), 400
-    p["auto_rest"] = not bool(p.get("auto_rest"))
-    save_db(db)
-    return jsonify({"success": True, "auto_rest": bool(p["auto_rest"])})
-
-# ---------------- PARTNER REQUEST ----------------
-@app.route("/api/partner/request", methods=["POST"])
-def api_partner_request():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    target = d.get("targetId")
-
-    if uid not in db["players"] or target not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-
-    p = db["players"][uid]
-    if p.get("status") == "offline":
-        return jsonify({"error": "ต้อง Check-in ก่อน"}), 400
-
-    # if already paired, cannot send new request
-    if p.get("pair_lock"):
-        return jsonify({"error": "คุณจับคู่แล้ว (ยกเลิกคู่ก่อน)"}), 400
-
-    # can request only one target at a time
-    out = p.get("outgoing_request_to")
-    if out and out != target:
-        return jsonify({"error": "คุณขอจับคู่ได้ทีละคน (ยกเลิกก่อน)"}), 400
-
-    if uid == target:
-        return jsonify({"error": "เลือกตัวเองไม่ได้"}), 400
-
-    # add to target incoming list
-    tp = db["players"][target]
-    inc = tp.get("incoming_requests", [])
-    if uid not in inc:
-        inc.append(uid)
-    tp["incoming_requests"] = inc
-    p["outgoing_request_to"] = target
-
-    save_db(db)
-    return jsonify({"success": True})
-
-@app.route("/api/partner/cancel_outgoing", methods=["POST"])
-def api_partner_cancel_outgoing():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    if uid not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-    cancel_outgoing(db, uid)
-    save_db(db)
-    return jsonify({"success": True})
-
-@app.route("/api/partner/accept", methods=["POST"])
-def api_partner_accept():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")            # acceptor
-    requester = d.get("requesterId") # who requested me
-
-    if uid not in db["players"] or requester not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-
-    acc = db["players"][uid]
-    req = db["players"][requester]
-
-    if acc.get("pair_lock"):
-        return jsonify({"error": "คุณจับคู่แล้ว (ยกเลิกคู่ก่อนถึงจะรับได้)"}), 400
-    if req.get("pair_lock"):
-        return jsonify({"error": "อีกฝ่ายจับคู่แล้ว"}), 400
-
-    # must have request relationship
-    if requester not in acc.get("incoming_requests", []):
-        return jsonify({"error": "ไม่พบคำขอ"}), 400
-
-    # If acceptor had outgoing request to someone else -> cancel it (as requested)
-    cancel_outgoing(db, uid)
-
-    # requester might have outgoing to acceptor; but even if not, allow accept based on inbox
-    # lock pair
-    acc["pair_lock"] = requester
-    req["pair_lock"] = uid
-
-    # requester cannot keep outgoing after paired
-    cancel_outgoing(db, requester)
-
-    save_db(db)
-    return jsonify({"success": True})
-
-@app.route("/api/partner/unpair", methods=["POST"])
-def api_partner_unpair():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    if uid not in db["players"]:
-        return jsonify({"error": "User not found"}), 404
-    unpair(db, uid)
-    save_db(db)
-    return jsonify({"success": True})
-
-# ---------------- MATCHMAKE ----------------
-@app.route("/api/matchmake", methods=["POST"])
-def api_matchmake():
-    db = get_db()
-    refresh_courts(db)
-
-    if not db["system_settings"].get("is_session_active"):
-        return jsonify({"error": "Session not active"}), 400
-
-    # pick court (prefer automatch off)
-    cid = first_empty_non_auto_court(db)
-    if not cid:
-        return jsonify({"status": "full"})
-
-    choice = choose_best_four(db)
-    if not choice:
-        return jsonify({"status": "waiting"})
-
-    teamA_ids, teamB_ids = choice
-    m = start_match_on_court(db, cid, teamA_ids, teamB_ids, source="manual_request")
-    save_db(db)
-    return jsonify({"status": "matched", "courtId": cid, "match_id": m["match_id"]})
-
-@app.route("/api/matchmake/manual", methods=["POST"])
-def api_matchmake_manual():
-    db = get_db()
-    refresh_courts(db)
-    d = request.json or {}
-    uid = d.get("userId")
-    if not is_mod(db, uid):
+    if not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
+    if not db["system_settings"].get("is_session_active"):
+        return jsonify({"error": "Session not active"}), 400
 
+    _refresh_courts_storage(db)
+    results = []
+    # fill free courts where auto_match is OFF
+    for cid in sorted(db["courts_state"].keys(), key=lambda x: int(x)):
+        if db["courts_state"].get(cid) is None and not db["system_settings"]["auto_match_courts"].get(cid, False):
+            res = _create_match_on_court(db, cid, source="manual_button")
+            results.append(res)
+    save_db(db)
+    return jsonify({"success": True, "results": results})
+
+@app.route("/api/matchmake/court", methods=["POST"])
+def api_matchmake_court():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
     cid = str(d.get("courtId"))
-    p_ids = d.get("playerIds", [])
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
     if cid not in db["courts_state"]:
         return jsonify({"error": "Court not found"}), 404
-    if db["courts_state"][cid] is not None:
-        return jsonify({"error": "Court Full"}), 400
-    if len(p_ids) != 4 or len(set(p_ids)) != 4:
-        return jsonify({"error": "Need 4 unique players"}), 400
-    for pid in p_ids:
-        if pid not in db["players"]:
-            return jsonify({"error": "Player not found"}), 404
-        if db["players"][pid].get("status") != "active":
-            return jsonify({"error": "Player must be checked-in and active"}), 400
-        if db["players"][pid].get("resting"):
-            return jsonify({"error": "Player is resting"}), 400
-
-    # keep requested locked pair together? admin can override; we allow any
-    teamA_ids = [p_ids[0], p_ids[1]]
-    teamB_ids = [p_ids[2], p_ids[3]]
-    m = start_match_on_court(db, cid, teamA_ids, teamB_ids, source="manual_admin")
+    res = _create_match_on_court(db, cid, source="manual_court")
     save_db(db)
-    return jsonify({"success": True, "match_id": m["match_id"]})
+    return jsonify(res)
 
-# ---------------- CANCEL MATCH ----------------
 @app.route("/api/match/cancel", methods=["POST"])
 def api_cancel_match():
     db = get_db()
-    refresh_courts(db)
     d = request.json or {}
     uid = d.get("userId")
     cid = str(d.get("courtId"))
-
-    if cid not in db["courts_state"]:
-        return jsonify({"error": "Court not found"}), 404
-    m = db["courts_state"].get(cid)
-    if not m:
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
+    if cid not in db["courts_state"] or not db["courts_state"][cid]:
         return jsonify({"error": "No match"}), 400
 
-    # auth: mod or one of 4 players
-    players4 = m.get("team_a_ids", []) + m.get("team_b_ids", [])
-    if not (is_mod(db, uid) or uid in players4):
-        return jsonify({"error": "Unauthorized"}), 403
+    m = db["courts_state"][cid]
+    a_ids = m.get("team_a_ids", [])
+    b_ids = m.get("team_b_ids", [])
 
-    # restore player states to active and restore queue time snapshot
-    snap = m.get("queue_snapshot", {})
-    for pid in players4:
-        p = db["players"].get(pid)
-        if not p:
-            continue
-        p["status"] = "active"
-        # restore queue time so they don't lose waiting time
-        if pid in snap and isinstance(snap[pid], (int, float)):
-            p["queue_join_time"] = float(snap[pid])
-        else:
-            if not isinstance(p.get("queue_join_time"), (int, float)):
-                p["queue_join_time"] = now_ts()
+    # add avoid teammate pairs to prevent immediate rematch (valid for 10 minutes)
+    until = now_ts() + 600
+    if len(a_ids) == 2:
+        db["recent_avoids"].append({"pair": [a_ids[0], a_ids[1]], "until": until})
+    if len(b_ids) == 2:
+        db["recent_avoids"].append({"pair": [b_ids[0], b_ids[1]], "until": until})
 
-    # avoid teammate pairs next match (store all teammate pairs from this match)
-    # we store both teams pairs
-    avoid = db["system_settings"].get("avoid_teammate_pairs", [])
-    until = now_ts() + 600  # 10 minutes
-    def add_pair(a, b):
-        a2 = str(min(a, b)); b2 = str(max(a, b))
-        avoid.append({"a": a2, "b": b2, "until": until})
-    ta = m.get("team_a_ids", [])
-    tb = m.get("team_b_ids", [])
-    if len(ta) == 2:
-        add_pair(ta[0], ta[1])
-    if len(tb) == 2:
-        add_pair(tb[0], tb[1])
-    db["system_settings"]["avoid_teammate_pairs"] = avoid
-
-    # clear court
+    # reset court
     db["courts_state"][cid] = None
 
-    # if automatch enabled for this court, try rematch immediately (new pairing)
-    try_automatch_for_court(db, cid)
-
+    # return players to active (keep queue_join_time; waiting continues)
+    for pid in a_ids + b_ids:
+        if pid in db["players"]:
+            db["players"][pid]["status"] = "active"
+            # keep queue_join_time as-is (so their waiting continues)
+            # keep pair_lock as-is
     save_db(db)
     return jsonify({"success": True})
 
-# ---------------- SUBMIT RESULT (score-based) ----------------
+# --- SUBMIT RESULT ---
 @app.route("/api/submit_result", methods=["POST"])
 def api_submit_result():
     db = get_db()
-    refresh_courts(db)
     d = request.json or {}
     uid = d.get("userId")
     cid = str(d.get("courtId"))
-    set_scores = d.get("set_scores", [])
+    sets = d.get("sets", [])
 
-    if cid not in db["courts_state"]:
-        return jsonify({"error": "Court not found"}), 404
-    m = db["courts_state"].get(cid)
-    if not m:
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if cid not in db["courts_state"] or not db["courts_state"][cid]:
         return jsonify({"error": "No match"}), 400
 
-    players4 = m.get("team_a_ids", []) + m.get("team_b_ids", [])
-    if not (is_mod(db, uid) or uid in players4):
+    m = db["courts_state"][cid]
+    a_ids = m.get("team_a_ids", [])
+    b_ids = m.get("team_b_ids", [])
+
+    # permission: player in match or staff
+    if not (is_staff(uid, db) or uid in a_ids or uid in b_ids):
         return jsonify({"error": "Unauthorized"}), 403
 
     cfg = db["system_settings"].get("session_config", {"target_points": 21, "bo": 1})
-    # parse set scores
-    parsed = []
-    try:
-        for s in set_scores:
-            if s is None:
-                continue
+    bo = int(cfg.get("bo", 1) or 1)
+
+    # validate sets count
+    if not isinstance(sets, list) or len(sets) != bo:
+        return jsonify({"error": f"ต้องกรอก {bo} เซ็ต"}), 400
+
+    # validate each set score
+    for idx, s in enumerate(sets):
+        try:
             a = int(s.get("a"))
             b = int(s.get("b"))
-            parsed.append({"a": a, "b": b})
-    except:
-        return jsonify({"error": "Invalid set_scores"}), 400
+        except:
+            return jsonify({"error": f"เซ็ต {idx+1} คะแนนไม่ถูกต้อง"}), 400
+        ok, err = _validate_set_score(cfg, a, b)
+        if not ok:
+            return jsonify({"error": f"เซ็ต {idx+1}: {err}"}), 400
 
-    info, msg = determine_winner_from_scores(parsed, cfg)
-    if not info:
-        return jsonify({"error": msg}), 400
+    # Determine winner
+    winner_team, meta = _winner_from_sets(cfg, sets)
 
-    winner = info["winner"]
-    sets_won_a = info["sets_won_a"]
-    sets_won_b = info["sets_won_b"]
-    pointsA = info["points_a_total"]
-    pointsB = info["points_b_total"]
+    # duration: if playing -> now-start_time, else 0 (countdown ended not started)
+    end_ts = now_ts()
+    duration_sec = 0
+    if m.get("start_time"):
+        duration_sec = max(0, int(round(end_ts - float(m["start_time"]))))
 
-    # duration
-    t = now_ts()
-    start_at = float(m.get("start_at", m.get("created_at", t)))
-    duration_sec = max(0, int(t - start_at))
+    # apply mmr and stats
+    res, err = _apply_mmr_and_stats(db, m, cfg, sets, winner_team, duration_sec)
+    if err:
+        return jsonify({"error": err}), 400
 
-    # MMR delta
-    delta_by_player = compute_mmr_delta(
-        db,
-        m.get("team_a_ids", []),
-        m.get("team_b_ids", []),
-        winner,
-        pointsA,
-        pointsB,
-        int(cfg.get("bo", 1))
-    )
-
-    # apply MMR, calibration + reset queue join time (they played)
-    # cooldown based on avg last 10
-    D = compute_avg_match_minutes(db)
-    C = int(db["system_settings"].get("total_courts", 2))
-    # N = eligible count (non-resting active)
-    elig_now = len([p for p in db["players"].values() if p.get("status") == "active" and not p.get("resting")])
-    load = (elig_now / max(1, (4 * C)))
-    cooldown_min = max(0.0, (load - 1.0) * D)
-    cooldown_sec = int(cooldown_min * 60)
-
-    for pid in players4:
-        p = db["players"].get(pid)
-        if not p:
-            continue
-        # mmr apply (even if unranked, stored)
-        old = int(p.get("mmr", 1000))
-        change = int(delta_by_player.get(pid, 0))
-        p["mmr"] = old + change
-
-        # calibrate games +1 per completed match (not per set)
-        cg = int(p.get("calibrate_games", 0))
-        if cg < 10:
-            p["calibrate_games"] = cg + 1
-
-        # back to active, reset waiting time to now (so everyone plays equally)
-        p["status"] = "active"
-        p["queue_join_time"] = t
-        p["last_active"] = t
-
-        # auto rest if enabled
-        if bool(p.get("auto_rest")) and cooldown_sec > 0:
-            p["resting"] = True
-            p["rest_until"] = t + cooldown_sec
-        else:
-            p["resting"] = False
-            p["rest_until"] = None
-
-    # write history
-    hist = {
-        "status": "completed",
-        "match_id": m.get("match_id"),
-        "event_id": db["system_settings"].get("current_event_id"),
-        "court_id": cid,
-        "created_at": m.get("created_at"),
-        "start_at": m.get("start_at"),
-        "ended_at": t,
-        "duration_sec": duration_sec,
-        "duration_min": round(duration_sec / 60.0, 1),
-        "settings": cfg,
-        "bo": int(cfg.get("bo", 1)),
-        "target_points": int(cfg.get("target_points", 21)),
-        "set_scores": parsed,
-        "points_a_total": pointsA,
-        "points_b_total": pointsB,
-        "sets_won_a": sets_won_a,
-        "sets_won_b": sets_won_b,
-        "winner_team": winner,
-        "team_a": m.get("team_a", []),
-        "team_a_ids": m.get("team_a_ids", []),
-        "team_b": m.get("team_b", []),
-        "team_b_ids": m.get("team_b_ids", []),
-        "mmr_delta_by_player": delta_by_player
-    }
-    db["match_history"].insert(0, hist)
+    # after match: set players back to active, reset queue_join_time to now (fair rotation)
+    cooldown_min = int(db["system_settings"].get("suggested_cooldown_min", 0) or 0)
+    for pid in a_ids + b_ids:
+        if pid in db["players"]:
+            pl = db["players"][pid]
+            pl["status"] = "active"
+            pl["queue_join_time"] = now_ts()  # goes to back of queue after playing
+            pl["last_active"] = now_ts()
+            # clear outgoing request while playing ended
+            _cancel_outgoing(db, pid)
+            # optional auto-rest (player opt-in)
+            if bool(pl.get("auto_rest")) and cooldown_min > 0:
+                pl["resting"] = True
+                pl["rest_until"] = now_ts() + cooldown_min * 60
+            else:
+                # do not force rest
+                if pl.get("rest_until") and pl.get("resting"):
+                    # keep if already resting set manually
+                    pass
 
     # clear court
     db["courts_state"][cid] = None
 
-    # automatch next if enabled for this court
-    try_automatch_for_court(db, cid)
+    # store history (with rank badge snapshots + W/L context computed in frontend)
+    match_rec_id = str(uuid.uuid4())[:10]
+    rank_snapshot = {}
+    for pid in a_ids + b_ids:
+        if pid in db["players"]:
+            rb1, rb2 = get_rank_badges(db["players"][pid])
+            rank_snapshot[pid] = {"rank_badge": rb1, "rank_badge2": rb2, "mmr_display": mmr_display(db["players"][pid])}
+
+    hist = {
+        "id": match_rec_id,
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "court_id": int(cid),
+        "winner_team": winner_team,
+        "sets": sets,
+        "meta": meta,
+        "duration_sec": duration_sec,
+        "team_a_ids": a_ids,
+        "team_b_ids": b_ids,
+        "team_a": m.get("team_a", []),
+        "team_b": m.get("team_b", []),
+        "pics": {
+            "A": [db["players"][pid].get("pictureUrl","") for pid in a_ids if pid in db["players"]],
+            "B": [db["players"][pid].get("pictureUrl","") for pid in b_ids if pid in db["players"]],
+        },
+        "mmr_snapshot": res.get("snapshot", {}),
+        "rank_snapshot": rank_snapshot,
+        "cancelled": False
+    }
+    db["match_history"].insert(0, hist)
 
     save_db(db)
-    return jsonify({"success": True})
+    return jsonify({"success": True, "winner": winner_team})
 
-# ---------------- PLAYER PROFILE ----------------
-@app.route("/api/player/profile/<uid>")
-def api_player_profile(uid):
+# --- MANUAL MATCHMAKE (admin picks 4 players) ---
+@app.route("/api/matchmake/manual", methods=["POST"])
+def api_manual_matchmake():
     db = get_db()
-    if uid not in db["players"]:
-        return jsonify({"error": "Not found"}), 404
-    p = db["players"][uid]
-    st_all = compute_player_stats(db, uid)
-    # last 10 matches
-    last10 = []
-    for m in db.get("match_history", []):
-        if m.get("status") != "completed":
-            continue
-        if uid in m.get("team_a_ids", []) or uid in m.get("team_b_ids", []):
-            # enrich teams
-            def pack(ids):
-                arr = []
-                for pid in ids:
-                    pl = db["players"].get(pid)
-                    if pl:
-                        arr.append({"id": pid, "nickname": pl["nickname"], "pictureUrl": pl.get("pictureUrl", "")})
-                return arr
-            mm = dict(m)
-            mm["team_a_data"] = pack(m.get("team_a_ids", []))
-            mm["team_b_data"] = pack(m.get("team_b_ids", []))
-            last10.append(mm)
-        if len(last10) >= 10:
-            break
+    d = request.json or {}
+    uid = d.get("userId")
+    cid = str(d.get("courtId"))
+    p_ids = d.get("playerIds", [])
 
-    return jsonify({
-        "id": uid,
-        "nickname": p["nickname"],
-        "pictureUrl": p.get("pictureUrl", ""),
-        "rank_text": display_rank_text(p),
-        "is_unranked": is_unranked(p),
-        "mmr": int(p.get("mmr", 1000)) if not is_unranked(p) else None,
-        "calibrate_games": int(p.get("calibrate_games", 0)),
-        "stats": st_all,
-        "last10": last10
-    })
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
+    if cid not in db["courts_state"]:
+        return jsonify({"error": "Court not found"}), 404
+    if db["courts_state"].get(cid):
+        return jsonify({"error": "Court Full"}), 400
+
+    players = []
+    for pid in p_ids:
+        if pid in db["players"]:
+            players.append(db["players"][pid])
+    if len(players) != 4:
+        return jsonify({"error": "Need 4 players"}), 400
+    if len(set([p["id"] for p in players])) != 4:
+        return jsonify({"error": "ผู้เล่นซ้ำกัน"}), 400
+
+    # simple split 2/2; manual overrides fairness
+    teamA = players[:2]
+    teamB = players[2:]
+
+    match_id = str(uuid.uuid4())[:8]
+    countdown_start = now_ts()
+    scheduled_start = countdown_start + 60
+
+    db["courts_state"][cid] = {
+        "match_id": match_id,
+        "state": "countdown",
+        "source": "manual_pick",
+        "created_at": countdown_start,
+        "countdown_start": countdown_start,
+        "scheduled_start": scheduled_start,
+        "start_time": None,
+        "team_a_ids": [p["id"] for p in teamA],
+        "team_b_ids": [p["id"] for p in teamB],
+        "team_a": [p.get("nickname","") for p in teamA],
+        "team_b": [p.get("nickname","") for p in teamB],
+    }
+
+    for p in teamA + teamB:
+        db["players"][p["id"]]["status"] = "playing"
+        _ensure_participant(db, p["id"])
+
+    save_db(db)
+    return jsonify({"success": True, "match_id": match_id})
+
+# --- PROFILE API ---
+@app.route("/api/player/profile", methods=["GET"])
+def api_player_profile():
+    db = get_db()
+    target = request.args.get("targetId")
+    if not target or target not in db["players"]:
+        return jsonify({"error": "Not found"}), 404
+    p = db["players"][target]
+    rb1, rb2 = get_rank_badges(p)
+    prof = {
+        "id": p["id"],
+        "nickname": p.get("nickname",""),
+        "pictureUrl": p.get("pictureUrl",""),
+        "mmr_display": mmr_display(p),
+        "rank_title": rank_title_set_a(int(p.get("mmr", 1000) or 1000)),
+        "rank_badge": rb1,
+        "rank_badge2": rb2,
+        "wr_badge": get_wr_badge(p),
+        "progress": progress_info(p),
+        "stats": {
+            "sets_w": int(p.get("sets_w", 0) or 0),
+            "sets_l": int(p.get("sets_l", 0) or 0),
+            "pts_for": int(p.get("pts_for", 0) or 0),
+            "pts_against": int(p.get("pts_against", 0) or 0),
+            "wr": winrate_percent(p)
+        }
+    }
+    # last 10 matches (global history filter)
+    last = []
+    for m in db.get("match_history", []):
+        if target in m.get("team_a_ids", []) or target in m.get("team_b_ids", []):
+            last.append(m)
+        if len(last) >= 10:
+            break
+    prof["last_matches"] = last
+    return jsonify(prof)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
