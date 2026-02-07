@@ -125,6 +125,8 @@ def _ensure_player(p, uid):
     p.setdefault("cooldown_until", 0.0)
     p.setdefault("auto_rest", False)
     p.setdefault("priority_match", False)  # mod can set to skip queue
+    p.setdefault("bio", "")               # self-intro text (max 150 chars)
+    p.setdefault("racket", "")            # racket model name
 
     # calibration
     p.setdefault("calib_played", 0)
@@ -1117,6 +1119,8 @@ def login():
         "wr_badge": wl_badge_class(p)[0],
         "wr": wl_badge_class(p)[1],
         "progress": progression_bar(p),
+        "bio": p.get("bio", ""),
+        "racket": p.get("racket", ""),
         "auto_rest": bool(p.get("auto_rest", False)),
         "outgoing_req": p.get("outgoing_req"),
         "incoming_reqs": incoming,
@@ -1278,6 +1282,8 @@ def get_player(uid):
         "wr": wr,
         "wr_badge": cls,
         "progress": progression_bar(p),
+        "bio": p.get("bio", ""),
+        "racket": p.get("racket", ""),
         "stats": {
             "sets_w": int(p.get("sets_w",0)),
             "sets_l": int(p.get("sets_l",0)),
@@ -1369,6 +1375,28 @@ def toggle_auto_rest():
     db["players"][uid]["auto_rest"] = val
     save_db(db)
     return jsonify({"success": True, "auto_rest": val})
+
+@app.route("/api/update_profile", methods=["POST"])
+def update_profile():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if not uid or uid not in db["players"]:
+        return jsonify({"error":"user not found"}), 404
+    p = db["players"][uid]
+
+    BIO_MAX = 150
+    RACKET_MAX = 60
+
+    if "bio" in d:
+        bio = str(d["bio"] or "").strip()[:BIO_MAX]
+        p["bio"] = bio
+    if "racket" in d:
+        racket = str(d["racket"] or "").strip()[:RACKET_MAX]
+        p["racket"] = racket
+
+    save_db(db)
+    return jsonify({"success": True, "bio": p.get("bio",""), "racket": p.get("racket","")})
 
 # =========================
 # Partner request system
@@ -1850,6 +1878,59 @@ def admin_cancel_skip_queue():
 
     save_db(db)
     return jsonify({"success": True})
+
+@app.route("/api/admin/hard_reset", methods=["POST"])
+def admin_hard_reset():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid != SUPER_ADMIN_ID:
+        return jsonify({"error":"Super Admin เท่านั้น"}), 403
+
+    mode = d.get("mode", "stats")
+
+    if mode == "all":
+        # Complete wipe — back to empty DB
+        new_db = deepcopy(DEFAULT_DB)
+        with DB_LOCK:
+            with open(DATA_FILE, "w") as f:
+                json.dump(new_db, f, ensure_ascii=False)
+        return jsonify({"success": True, "mode": "all"})
+
+    elif mode == "stats":
+        # Keep players (name, pic, role) but reset all stats
+        stat_keys = [
+            "mmr", "calib_played", "calib_wins", "calib_losses", "calib_streak",
+            "sets_w", "sets_l", "points_for", "points_against",
+            "match_w", "match_l", "best_streak", "cur_streak"
+        ]
+        for p in db["players"].values():
+            for k in stat_keys:
+                p[k] = 1000 if k == "mmr" else 0
+            p["status"] = "offline"
+            p["queue_join_ts"] = 0.0
+            p["cooldown_until"] = 0.0
+            p["priority_match"] = False
+            p["paired_with"] = None
+            p["outgoing_req"] = None
+            p["incoming_reqs"] = []
+            p["auto_rest"] = False
+
+        # Clear match history, events, courts, diversity
+        db["match_history"] = []
+        db["events"] = {}
+        db["courts"] = {}
+        db["system_settings"]["is_session_active"] = False
+        db["system_settings"]["current_event_id"] = None
+        db["system_settings"]["avoid_4"] = []
+        db["system_settings"]["recent_teammates"] = {}
+        db["system_settings"]["recent_opponents"] = {}
+        db["system_settings"]["automatch"] = {}
+
+        save_db(db)
+        return jsonify({"success": True, "mode": "stats"})
+
+    return jsonify({"error": "Invalid mode"}), 400
 
 @app.route("/api/event/create", methods=["POST"])
 def event_create():

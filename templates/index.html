@@ -201,6 +201,28 @@
           <span id="me-progress-hint">...</span>
         </div>
       </div>
+
+      <!-- Bio & Racket -->
+      <div class="mt-4 space-y-2">
+        <div id="me-bio-display"></div>
+        <div id="me-racket-display"></div>
+        <button onclick="toggleBioEdit()" class="btn btn-xs btn-ghost text-indigo-500" id="me-bio-edit-btn">✏️ แก้ไขโปรไฟล์</button>
+        <div id="me-bio-form" class="hidden space-y-2 mt-2 p-3 bg-slate-50 rounded border">
+          <div>
+            <label class="text-xs text-gray-500">🏸 รุ่นไม้ที่ใช้ (ไม่บังคับ)</label>
+            <input id="me-racket-input" class="input input-bordered input-sm w-full" maxlength="60" placeholder="เช่น Yonex Astrox 88D">
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">📝 แนะนำตัว (ไม่บังคับ, ไม่เกิน 150 ตัวอักษร)</label>
+            <textarea id="me-bio-input" class="textarea textarea-bordered textarea-sm w-full" maxlength="150" rows="3" placeholder="เช่น เล่นแบดมา 3 ปี ชอบตบหน้าเน็ต"></textarea>
+            <div class="text-right text-[10px] text-gray-400"><span id="me-bio-count">0</span>/150</div>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="saveProfile()" class="btn btn-sm btn-primary flex-1">บันทึก</button>
+            <button onclick="clearProfile()" class="btn btn-sm btn-ghost text-red-500">ลบทั้งหมด</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -348,6 +370,14 @@
             <tbody id="admin-user-list"></tbody>
           </table>
         </div>
+
+        <div class="mt-3 p-3 bg-red-50 border border-red-200 rounded">
+          <h4 class="font-bold text-sm text-red-600 mb-2">⚠️ Danger Zone</h4>
+          <div class="flex flex-col gap-2">
+            <button onclick="hardResetStats()" class="btn btn-sm btn-outline btn-warning w-full">🔄 Reset สถิติทั้งหมด (คง MMR/ผู้เล่น)</button>
+            <button onclick="hardResetAll()" class="btn btn-sm btn-error text-white w-full">💣 Hard Reset ทั้งหมด (ลบทุกอย่าง)</button>
+          </div>
+        </div>
       </div>
 
       <!-- Mod-level: MMR edit for any player -->
@@ -444,6 +474,12 @@
           <span id="pf-progress-label">...</span>
           <span id="pf-progress-hint">...</span>
         </div>
+      </div>
+
+      <!-- Bio & Racket (read-only) -->
+      <div id="pf-bio-section" class="mt-3 space-y-1 hidden">
+        <div id="pf-racket-line" class="hidden text-xs"><span class="text-gray-400">🏸</span> <span id="pf-racket" class="font-bold text-gray-700"></span></div>
+        <div id="pf-bio-line" class="hidden text-xs text-gray-600 bg-slate-50 rounded p-2 border italic"></div>
       </div>
 
       <div class="mt-4 grid grid-cols-2 gap-2">
@@ -570,6 +606,85 @@
       document.getElementById('me-progress-hint').innerText = prog.type === "calib"
         ? "calibrating"
         : (prog.to_up != null ? `to up: ${prog.to_up}` : "");
+
+      // Bio & Racket display on my profile tab
+      renderMyBioRacket();
+    }
+
+    function renderMyBioRacket(){
+      const bio = user.bio || "";
+      const racket = user.racket || "";
+      const bioDisp = document.getElementById('me-bio-display');
+      const rktDisp = document.getElementById('me-racket-display');
+
+      if(racket){
+        rktDisp.innerHTML = `<div class="text-xs"><span class="text-gray-400">🏸</span> <span class="font-bold text-gray-700">${escHtml(racket)}</span></div>`;
+      } else {
+        rktDisp.innerHTML = '';
+      }
+      if(bio){
+        bioDisp.innerHTML = `<div class="text-xs text-gray-600 bg-slate-50 rounded p-2 border italic">${escHtml(bio)}</div>`;
+      } else {
+        bioDisp.innerHTML = '';
+      }
+    }
+
+    function escHtml(s){
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function toggleBioEdit(){
+      const form = document.getElementById('me-bio-form');
+      const isHidden = form.classList.contains('hidden');
+      form.classList.toggle('hidden');
+      if(isHidden){
+        document.getElementById('me-bio-input').value = user.bio || "";
+        document.getElementById('me-racket-input').value = user.racket || "";
+        document.getElementById('me-bio-count').innerText = (user.bio||"").length;
+        document.getElementById('me-bio-edit-btn').innerText = "✕ ยกเลิก";
+
+        document.getElementById('me-bio-input').oninput = function(){
+          document.getElementById('me-bio-count').innerText = this.value.length;
+        };
+      } else {
+        document.getElementById('me-bio-edit-btn').innerText = "✏️ แก้ไขโปรไฟล์";
+      }
+    }
+
+    async function saveProfile(){
+      const bio = document.getElementById('me-bio-input').value.trim();
+      const racket = document.getElementById('me-racket-input').value.trim();
+      const r = await (await fetch('/api/update_profile',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, bio, racket})
+      })).json();
+      if(r.error) return alert(r.error);
+      user.bio = r.bio;
+      user.racket = r.racket;
+      document.getElementById('me-bio-form').classList.add('hidden');
+      document.getElementById('me-bio-edit-btn').innerText = "✏️ แก้ไขโปรไฟล์";
+      renderMyBioRacket();
+      toast("บันทึกโปรไฟล์แล้ว!");
+    }
+
+    async function clearProfile(){
+      if(!confirm("ลบข้อความแนะนำตัวและรุ่นไม้?")) return;
+      const r = await (await fetch('/api/update_profile',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, bio:"", racket:""})
+      })).json();
+      if(r.error) return alert(r.error);
+      user.bio = "";
+      user.racket = "";
+      document.getElementById('me-bio-input').value = "";
+      document.getElementById('me-racket-input').value = "";
+      document.getElementById('me-bio-count').innerText = "0";
+      document.getElementById('me-bio-form').classList.add('hidden');
+      document.getElementById('me-bio-edit-btn').innerText = "✏️ แก้ไขโปรไฟล์";
+      renderMyBioRacket();
+      toast("ลบข้อมูลโปรไฟล์แล้ว");
     }
 
     function beepAndVibrate(){
@@ -1791,6 +1906,31 @@
       document.getElementById('bill-grand-total').innerText = grand;
     }
 
+    async function hardResetStats(){
+      if(!confirm("⚠️ Reset สถิติทุกคน?\n(MMR, W/L, Streak, History จะถูกลบ)\n\nผู้เล่นและ Mod ยังอยู่")) return;
+      if(!confirm("ยืนยันอีกครั้ง? กดตกลงเพื่อ Reset สถิติ")) return;
+      const r = await (await fetch('/api/admin/hard_reset',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, mode:'stats'})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("🔄 Reset สถิติสำเร็จ!");
+      await refresh();
+    }
+
+    async function hardResetAll(){
+      if(!confirm("💣 ลบข้อมูลทั้งหมด!\n\nผู้เล่น, สถิติ, Events, History\nจะถูกลบทั้งหมด กลับเป็นค่าเริ่มต้น")) return;
+      if(!confirm("⚠️ ยืนยันอีกครั้ง? ข้อมูลจะหายถาวร!")) return;
+      if(prompt("พิมพ์ 'RESET' เพื่อยืนยัน") !== "RESET") return alert("ยกเลิก");
+      const r = await (await fetch('/api/admin/hard_reset',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, mode:'all'})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("💣 Hard Reset สำเร็จ!");
+      location.reload();
+    }
+
     function copyBillSummary(){
       const eid = document.getElementById('bill-event-select').value;
       const evt = (dashboard.events||[]).find(e=>e.id===eid);
@@ -1850,6 +1990,31 @@
         document.getElementById('pf-progress').value = prog.pct || 0;
         document.getElementById('pf-progress-label').innerText = prog.label || "";
         document.getElementById('pf-progress-hint').innerText = prog.type==="calib" ? "calibrating" : (prog.to_up!=null?`to up: ${prog.to_up}`:"");
+
+        // Bio & Racket
+        const bioSec = document.getElementById('pf-bio-section');
+        const rktLine = document.getElementById('pf-racket-line');
+        const bioLine = document.getElementById('pf-bio-line');
+        const hasBio = !!(r.bio);
+        const hasRacket = !!(r.racket);
+
+        if(hasBio || hasRacket){
+          bioSec.classList.remove('hidden');
+          if(hasRacket){
+            rktLine.classList.remove('hidden');
+            document.getElementById('pf-racket').innerText = r.racket;
+          } else {
+            rktLine.classList.add('hidden');
+          }
+          if(hasBio){
+            bioLine.classList.remove('hidden');
+            bioLine.innerText = r.bio;
+          } else {
+            bioLine.classList.add('hidden');
+          }
+        } else {
+          bioSec.classList.add('hidden');
+        }
 
         document.getElementById('pf-sets').innerText = `${r.stats.sets_w}/${r.stats.sets_l}`;
         document.getElementById('pf-matches').innerText = `${r.stats.match_w}/${r.stats.match_l}`;
