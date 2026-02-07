@@ -522,6 +522,7 @@
     let selectedCid = null;
     let historyMode = "my";
     let lbMode = "mmr";
+    let _dashboardEtag = null;  // #2: ETag for conditional polling
 
     let lastNotifiedMatchId = localStorage.getItem("lastMatchId") || "";
 
@@ -579,7 +580,7 @@
       user = await res.json();
       renderUserTop();
       try{ await refresh(); }catch(e){ console.error("Initial refresh error:", e); }
-      setInterval(()=>{ refresh().catch(e=>console.error("Poll error:", e)); }, 4000);
+      setInterval(()=>{ refresh().catch(e=>console.error("Poll error:", e)); }, 6000);
 
       // BUG FIX: start client-side court timer (updates every second)
       if(courtTimerInterval) clearInterval(courtTimerInterval);
@@ -711,8 +712,15 @@
 
     async function refresh(){
       try {
-        const res = await fetch('/api/get_dashboard');
+        const headers = {};
+        if(_dashboardEtag) headers['If-None-Match'] = _dashboardEtag;
+        const res = await fetch('/api/get_dashboard', {headers});
+
+        // #2: 304 Not Modified — nothing changed, skip all rendering
+        if(res.status === 304) return;
+
         dashboard = await res.json();
+        _dashboardEtag = res.headers.get('ETag') || null;
       } catch(e) {
         console.error("refresh failed:", e);
         return;

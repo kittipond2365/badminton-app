@@ -5,10 +5,14 @@ import uuid
 import math
 import random
 import threading
+import hashlib
+import gzip
+import atexit
+import signal
 from copy import deepcopy
 from itertools import combinations
 from datetime import datetime, timezone, timedelta
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, make_response
 
 app = Flask(__name__)
 
@@ -24,6 +28,17 @@ SUPER_ADMIN_ID = "U1cf933e3a1559608c50c0456f6583dc9"
 DATA_FILE = os.environ.get("IZESQUAD_DATA_FILE", "/var/data/izesquad_data.json")
 
 DB_LOCK = threading.Lock()
+
+# =========================
+# Optimization: In-memory DB cache
+# =========================
+MATCH_HISTORY_MAX = 2000         # #3: cap history
+SAVE_INTERVAL_SEC = 5            # flush to disk every 5s
+_DB_CACHE = None                 # in-memory DB (the single source of truth)
+_DB_DIRTY = False                # flag: needs disk flush
+_DB_VERSION = 0                  # incremented on every mutation → used for ETag
+_DASHBOARD_CACHE = None          # cached dashboard JSON bytes
+_DASHBOARD_VERSION = -1          # version when cache was built
 
 # =========================
 # Defaults + DB helpers
@@ -78,25 +93,96 @@ def _init_db_file():
     if not os.path.exists(DATA_FILE):
         _atomic_write_json(DATA_FILE, DEFAULT_DB)
 
-def get_db():
+def _load_db_from_disk():
+    """Load DB from disk into memory (called once at startup)."""
+    global _DB_CACHE, _DB_VERSION
     _init_db_file()
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # migrate / fill defaults
         _deep_merge(data, DEFAULT_DB)
         _refresh_courts(data)
         _normalize_players(data)
-        return data
     except Exception:
-        # fallback to defaults
         data = deepcopy(DEFAULT_DB)
         _refresh_courts(data)
-        return data
+    _DB_CACHE = data
+    _DB_VERSION = 0
 
-def save_db(data):
+def get_db():
+    """Return in-memory DB (no disk I/O)."""
+    global _DB_CACHE
+    if _DB_CACHE is None:
+        _load_db_from_disk()
+    return _DB_CACHE
+
+def save_db(data=None):
+    """Mark DB as dirty for background flush. Trims history. No immediate disk write."""
+    global _DB_DIRTY, _DB_VERSION, _DB_CACHE
+    if data is not None:
+        _DB_CACHE = data
+    db = _DB_CACHE
+    # #3: Cap match_history
+    if len(db.get("match_history", [])) > MATCH_HISTORY_MAX:
+        db["match_history"] = db["match_history"][:MATCH_HISTORY_MAX]
+    _DB_VERSION += 1
+    _DB_DIRTY = True
+
+def _flush_to_disk():
+    """Actually write to disk (called by background thread)."""
+    global _DB_DIRTY
+    if not _DB_DIRTY or _DB_CACHE is None:
+        return
     with DB_LOCK:
-        _atomic_write_json(DATA_FILE, data)
+        try:
+            _atomic_write_json(DATA_FILE, _DB_CACHE)
+            _DB_DIRTY = False
+        except Exception as e:
+            print(f"[FLUSH ERROR] {e}")
+
+def _background_save_loop():
+    """Background thread: flush dirty DB to disk every SAVE_INTERVAL_SEC."""
+    while True:
+        time.sleep(SAVE_INTERVAL_SEC)
+        try:
+            _flush_to_disk()
+        except Exception as e:
+            print(f"[BG SAVE ERROR] {e}")
+
+# Start background save thread
+_save_thread = threading.Thread(target=_background_save_loop, daemon=True)
+_save_thread.start()
+
+# Graceful shutdown: flush to disk before exit
+def _shutdown_flush(*args):
+    print("[SHUTDOWN] Flushing DB to disk...")
+    _flush_to_disk()
+atexit.register(_shutdown_flush)
+signal.signal(signal.SIGTERM, lambda *a: (_shutdown_flush(), exit(0)))
+
+# =========================
+# #4: Gzip middleware
+# =========================
+@app.after_request
+def gzip_response(response):
+    """Gzip JSON responses > 500 bytes if client accepts it."""
+    if (response.status_code < 200 or response.status_code >= 300
+            or response.direct_passthrough
+            or 'Content-Encoding' in response.headers
+            or 'gzip' not in request.headers.get('Accept-Encoding', '')):
+        return response
+    ct = response.content_type or ""
+    if 'application/json' not in ct and 'text/html' not in ct:
+        return response
+    data = response.get_data()
+    if len(data) < 500:
+        return response
+    compressed = gzip.compress(data, compresslevel=6)
+    response.set_data(compressed)
+    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Content-Length'] = len(compressed)
+    response.headers['Vary'] = 'Accept-Encoding'
+    return response
 
 def _refresh_courts(db):
     total = int(db["system_settings"].get("total_courts", 2))
@@ -1073,7 +1159,14 @@ def index():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "time": _now(), "data_file": DATA_FILE})
+    db = _DB_CACHE
+    players = len(db["players"]) if db else 0
+    history = len(db.get("match_history", [])) if db else 0
+    return jsonify({
+        "ok": True, "time": _now(), "data_file": DATA_FILE,
+        "cache": "in-memory", "version": _DB_VERSION, "dirty": _DB_DIRTY,
+        "players": players, "history_count": history, "history_max": MATCH_HISTORY_MAX,
+    })
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -1129,6 +1222,8 @@ def login():
 
 @app.route("/api/get_dashboard")
 def get_dashboard():
+    global _DASHBOARD_CACHE, _DASHBOARD_VERSION
+
     db = get_db()
 
     # run automatch opportunistically
@@ -1142,6 +1237,12 @@ def get_dashboard():
 
     if changed or auto_started or auto_ended:
         save_db(db)
+
+    # #2: ETag — skip recompute if nothing changed
+    etag = f'W/"{_DB_VERSION}"'
+    if_none_match = request.headers.get('If-None-Match')
+    if if_none_match == etag and _DASHBOARD_CACHE is not None:
+        return make_response('', 304)
 
     now = _now()
 
@@ -1233,9 +1334,9 @@ def get_dashboard():
     history = [m for m in db.get("match_history", [])[:50]
                if isinstance(m, dict) and "team_a_ids" in m and "team_b_ids" in m][:40]
 
-    return jsonify({
+    resp = jsonify({
         "system": db["system_settings"],
-        "mod_ids": db.get("mod_ids", []),   # BUG FIX: expose mod_ids for admin UI
+        "mod_ids": db.get("mod_ids", []),
         "courts": courts,
         "automatch": db["system_settings"]["automatch"],
         "queue": queue,
@@ -1249,6 +1350,11 @@ def get_dashboard():
         "history": history,
         "all_players": all_players
     })
+    resp.headers['ETag'] = etag
+    resp.headers['Cache-Control'] = 'no-cache'
+    _DASHBOARD_CACHE = True
+    _DASHBOARD_VERSION = _DB_VERSION
+    return resp
 
 @app.route("/api/player/<uid>")
 def get_player(uid):
@@ -1891,10 +1997,12 @@ def admin_hard_reset():
 
     if mode == "all":
         # Complete wipe — back to empty DB
+        global _DB_CACHE
         new_db = deepcopy(DEFAULT_DB)
-        with DB_LOCK:
-            with open(DATA_FILE, "w") as f:
-                json.dump(new_db, f, ensure_ascii=False)
+        _refresh_courts(new_db)
+        _DB_CACHE = new_db
+        save_db(new_db)
+        _flush_to_disk()  # immediate flush for hard reset
         return jsonify({"success": True, "mode": "all"})
 
     elif mode == "stats":
@@ -1928,6 +2036,7 @@ def admin_hard_reset():
         db["system_settings"]["automatch"] = {}
 
         save_db(db)
+        _flush_to_disk()  # immediate flush for hard reset
         return jsonify({"success": True, "mode": "stats"})
 
     return jsonify({"error": "Invalid mode"}), 400
@@ -2046,6 +2155,9 @@ def event_leave():
     save_db(db)
     return jsonify({"success": True})
 
+
+# Load DB into memory at import time
+_load_db_from_disk()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
