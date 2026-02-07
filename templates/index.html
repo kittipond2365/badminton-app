@@ -230,9 +230,32 @@
   <!-- EVENTS TAB -->
   <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
     <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow">
-      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event</h3>
-      <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน">
+      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event ล่วงหน้า</h3>
+      <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน (ไม่กรอก = ใช้วันที่)">
+      <input id="evt-location" class="input input-bordered input-sm w-full mb-2" placeholder="📍 สถานที่ (ไม่บังคับ)">
+
+      <label class="text-xs text-gray-500 ml-1">เวลาเริ่ม *</label>
       <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
+      <label class="text-xs text-gray-500 ml-1">เวลาสิ้นสุด (ไม่บังคับ — ปิด session อัตโนมัติ 2 ชม. หลังจบ)</label>
+      <input id="evt-end-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
+
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <select id="evt-points" class="select select-bordered select-sm w-full">
+          <option value="21" selected>แต้ม 21</option>
+          <option value="11">แต้ม 11</option>
+        </select>
+        <select id="evt-bo" class="select select-bordered select-sm w-full">
+          <option value="1" selected>BO1</option>
+          <option value="2">BO2</option>
+          <option value="3">BO3</option>
+        </select>
+      </div>
+
+      <label class="label cursor-pointer justify-start gap-2 mb-2">
+        <input type="checkbox" class="checkbox checkbox-sm checkbox-primary" id="evt-notify">
+        <span class="label-text text-xs">เปิดแจ้งเตือน</span>
+      </label>
+
       <button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button>
     </div>
     <div id="events-list" class="space-y-3"></div>
@@ -243,6 +266,12 @@
     <div class="modal-box">
       <h3 class="font-bold text-lg">จบเกม Court <span id="fin-cid"></span></h3>
       <div class="text-xs text-gray-500 mt-1" id="fin-rule"></div>
+
+      <!-- BUG FIX: show team names in score modal for clarity -->
+      <div class="mt-2 grid grid-cols-2 gap-2 text-center text-xs">
+        <div class="bg-red-50 rounded p-1 font-bold text-red-600" id="fin-team-a">Team A</div>
+        <div class="bg-blue-50 rounded p-1 font-bold text-blue-600" id="fin-team-b">Team B</div>
+      </div>
 
       <div class="mt-3 space-y-3" id="score-inputs"></div>
 
@@ -308,18 +337,47 @@
         <button onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน</button>
       </div>
 
+      <!-- BUG FIX: Complete super admin section with mod promote/demote + MMR edit -->
       <div id="super-admin-section" class="mb-4 hidden">
-        <h4 class="font-bold text-sm mb-2">Moderators</h4>
-        <div class="h-48 overflow-y-auto border rounded p-2 bg-white">
+        <h4 class="font-bold text-sm mb-2">จัดการผู้เล่น (Super Admin)</h4>
+        <div class="h-64 overflow-y-auto border rounded p-2 bg-white">
           <table class="table table-xs">
+            <thead>
+              <tr><th>ชื่อ</th><th>Role</th><th class="text-right">Actions</th></tr>
+            </thead>
             <tbody id="admin-user-list"></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Mod-level: MMR edit for any player -->
+      <div id="mod-mmr-section" class="mb-4 hidden">
+        <h4 class="font-bold text-sm mb-2">แก้ MMR ผู้เล่น</h4>
+        <div class="join w-full">
+          <select id="mmr-target-select" class="select select-bordered select-sm join-item w-full">
+            <option disabled selected>-- เลือกผู้เล่น --</option>
+          </select>
+          <input id="mmr-new-value" type="number" class="input input-bordered input-sm join-item w-24" placeholder="MMR">
+          <button onclick="submitSetMMR()" class="btn btn-sm btn-warning join-item">Set</button>
         </div>
       </div>
 
       <div class="modal-action">
         <form method="dialog"><button class="btn">ปิด</button></form>
       </div>
+    </div>
+  </dialog>
+
+  <!-- BUG FIX: Add missing MMR edit modal -->
+  <dialog id="modal_edit_mmr" class="modal">
+    <div class="modal-box max-w-xs">
+      <h3 class="font-bold text-lg mb-3">แก้ไข MMR</h3>
+      <div class="text-sm mb-2">ผู้เล่น: <b id="edit-mmr-name">...</b></div>
+      <div class="text-sm mb-2">MMR ปัจจุบัน: <b id="edit-mmr-current">...</b></div>
+      <input id="edit-mmr-input" type="number" class="input input-bordered w-full mb-3" placeholder="MMR ใหม่">
+      <input id="edit-mmr-uid" type="hidden">
+      <button onclick="confirmSetMMR()" class="btn btn-warning w-full">บันทึก</button>
+      <form method="dialog" class="mt-2 text-center"><button class="btn btn-ghost btn-sm">ยกเลิก</button></form>
     </div>
   </dialog>
 
@@ -420,6 +478,7 @@
 
   <!-- SCRIPT -->
   <script>
+    // BUG FIX: Use the actual LIFF ID instead of placeholder
     const LIFF_ID = "2009064792-6RT6YKWO";
 
     let user = null;
@@ -429,6 +488,9 @@
     let lbMode = "mmr";
 
     let lastNotifiedMatchId = localStorage.getItem("lastMatchId") || "";
+
+    // BUG FIX: client-side timers for courts (update every second between polls)
+    let courtTimerInterval = null;
 
     function switchTab(t){
       document.querySelectorAll('.tab').forEach(e=>e.classList.remove('tab-active'));
@@ -465,7 +527,8 @@
           const p = await liff.getProfile();
           await apiLogin(p.userId, p.displayName, p.pictureUrl);
         }catch(e){
-          alert("LIFF Error: " + e);
+          console.error("Init Error:", e);
+          alert("Init Error: " + e);
         }
       }
     }
@@ -478,8 +541,12 @@
       });
       user = await res.json();
       renderUserTop();
-      await refresh();
-      setInterval(refresh, 4000);
+      try{ await refresh(); }catch(e){ console.error("Initial refresh error:", e); }
+      setInterval(()=>{ refresh().catch(e=>console.error("Poll error:", e)); }, 4000);
+
+      // BUG FIX: start client-side court timer (updates every second)
+      if(courtTimerInterval) clearInterval(courtTimerInterval);
+      courtTimerInterval = setInterval(updateCourtTimersClient, 1000);
     }
 
     function renderUserTop(){
@@ -527,36 +594,45 @@
     }
 
     async function refresh(){
-      const res = await fetch('/api/get_dashboard');
-      dashboard = await res.json();
+      try {
+        const res = await fetch('/api/get_dashboard');
+        dashboard = await res.json();
+      } catch(e) {
+        console.error("refresh failed:", e);
+        return;
+      }
 
-      // update session UI
       const sessActive = !!dashboard.system?.is_session_active;
       document.getElementById('session-pill').innerText = sessActive ? "SESSION ON" : "";
+      document.getElementById('session-pill').className = sessActive
+        ? "text-xs font-bold text-green-500 ml-2"
+        : "text-xs font-bold text-indigo-500 ml-2";
       document.getElementById('session-alert').classList.toggle('hidden', sessActive);
 
-      // staff ui
       if(isStaff()){
         document.getElementById('btn-admin').classList.remove('hidden');
         document.getElementById('btn-bill').classList.remove('hidden');
         document.getElementById('staff-court-control').classList.remove('hidden');
         document.querySelectorAll('.staff-only').forEach(e=>e.classList.remove('hidden'));
+        // BUG FIX: show mod MMR section for staff
+        document.getElementById('mod-mmr-section').classList.remove('hidden');
+        renderModMMRSelect();
       }
       if(user && user.role === "super"){
         document.getElementById('super-admin-section').classList.remove('hidden');
       }
 
-      // update local "user" from dashboard all_players (fix mmr change not reflecting)
+      // update user from dashboard
       if(dashboard.all_players && user){
         const me = dashboard.all_players.find(p=>p.id===user.id);
         if(me){
-          // keep role from login
           user.status = me.status;
           user.mmr_display = me.unranked ? `UNRANK (${me.calib_played}/10)` : String(me.mmr);
           user.rank_title = me.rank_title;
           user.rank_color = me.rank_color;
           user.wr = me.wr;
           user.wr_badge = me.wr_badge;
+          if(me.progress) user.progress = me.progress;
         }
       }
       renderUserTop();
@@ -568,8 +644,9 @@
       renderLeaderboards();
       renderHistory();
       renderPartnerArea();
+      renderAdminUserList();
 
-      // notify when matched (sound+vibrate) if mod enabled
+      // notify when matched
       if(dashboard.system?.notify_enabled){
         for(const [cid, st] of Object.entries(dashboard.courts||{})){
           if(!st) continue;
@@ -589,7 +666,7 @@
       t.className = "toast toast-top toast-center z-[999]";
       t.innerHTML = `<div class="alert alert-info shadow"><span>${msg}</span></div>`;
       document.body.appendChild(t);
-      setTimeout(()=>t.remove(), 1500);
+      setTimeout(()=>t.remove(), 2500);
     }
 
     function renderCheckinArea(sessActive){
@@ -620,7 +697,8 @@
         restBtn.classList.remove('hidden');
         restBtn.innerHTML = `<i class="fa-solid fa-mug-hot mr-1"></i> พักเหนื่อย`;
         autoRestBox.classList.remove('hidden');
-        document.getElementById('auto-rest-toggle').checked = !!(dashboard.all_players.find(p=>p.id===user.id)?.auto_rest);
+        const meData = dashboard.all_players ? dashboard.all_players.find(p=>p.id===user.id) : null;
+        document.getElementById('auto-rest-toggle').checked = !!(meData?.auto_rest);
       }else if(st === "resting"){
         btn.className = "btn btn-outline btn-error w-full";
         btn.innerText = "❌ ลงชื่อออก";
@@ -629,7 +707,8 @@
         restBtn.classList.remove('hidden');
         restBtn.innerHTML = `<i class="fa-solid fa-person-walking mr-1"></i> เลิกพัก`;
         autoRestBox.classList.remove('hidden');
-        document.getElementById('auto-rest-toggle').checked = !!(dashboard.all_players.find(p=>p.id===user.id)?.auto_rest);
+        const meData = dashboard.all_players ? dashboard.all_players.find(p=>p.id===user.id) : null;
+        document.getElementById('auto-rest-toggle').checked = !!(meData?.auto_rest);
       }else if(st === "playing"){
         btn.className = "btn btn-disabled w-full";
         btn.innerText = "🏸 กำลังแข่งขัน";
@@ -736,9 +815,10 @@
 
         const canControl = isStaff() || [...st.team_a, ...st.team_b].some(x=>x.id===user.id);
 
+        // BUG FIX: store server timestamps for client-side timer updates
         const timeLabel = st.started
-          ? `${Math.floor(st.elapsed_sec/60)} min`
-          : `เริ่มใน ${Math.ceil(st.countdown_sec/1)}s`;
+          ? `<span class="court-timer" data-start-at="${st.start_at}">${Math.floor(st.elapsed_sec/60)}:${String(st.elapsed_sec%60).padStart(2,'0')}</span>`
+          : `<span class="court-countdown" data-start-at="${st.start_at}">เริ่มใน ${st.countdown_sec}s</span>`;
 
         cc.innerHTML += `
           <div class="card bg-white border border-indigo-100 shadow-sm p-3">
@@ -764,6 +844,48 @@
       }
     }
 
+    // BUG FIX: update court timers client-side every second
+    function updateCourtTimersClient(){
+      const now = Date.now() / 1000;
+
+      document.querySelectorAll('.court-timer').forEach(el => {
+        const startAt = parseFloat(el.dataset.startAt || "0");
+        if(!startAt) return;
+        const elapsed = Math.max(0, Math.floor(now - startAt));
+        const min = Math.floor(elapsed / 60);
+        const sec = elapsed % 60;
+        el.innerText = `${min}:${String(sec).padStart(2,'0')}`;
+      });
+
+      document.querySelectorAll('.court-countdown').forEach(el => {
+        const startAt = parseFloat(el.dataset.startAt || "0");
+        if(!startAt) return;
+        const left = Math.max(0, Math.ceil(startAt - now));
+        if(left <= 0){
+          el.innerText = "เริ่มแล้ว!";
+          el.classList.add('text-green-600');
+        } else {
+          el.innerText = `เริ่มใน ${left}s`;
+        }
+      });
+
+      // Event countdowns
+      document.querySelectorAll('.event-countdown').forEach(el => {
+        const target = parseFloat(el.dataset.evtTarget || "0");
+        if(!target) return;
+        const left = Math.max(0, Math.floor(target - now));
+        const txt = el.querySelector('.countdown-text');
+        if(!txt) return;
+        if(left <= 0){
+          txt.innerText = "ถึงเวลาแล้ว!";
+          txt.classList.remove('text-blue-700');
+          txt.classList.add('text-green-600');
+        } else {
+          txt.innerText = formatCountdown(left);
+        }
+      });
+    }
+
     function renderQueueAndRest(){
       const q = dashboard.queue || [];
       const r = dashboard.resting || [];
@@ -771,27 +893,45 @@
       document.getElementById('r-count').innerText = r.length;
 
       const qList = document.getElementById('queue-list');
+      const staffView = isStaff();
       qList.innerHTML = q.length ? q.map((p,i)=>{
-        const cd = p.cooldown_left_min ? `<span class="badge badge-warning badge-xs ml-1">CD ${p.cooldown_left_min}m</span>` : "";
+        // BUG FIX: use cooldown_left_sec for more accurate display
+        const cdSec = p.cooldown_left_sec || 0;
+        const cdMin = Math.ceil(cdSec / 60);
+        const cd = cdSec > 0 ? `<span class="badge badge-warning badge-xs ml-1">CD ${cdMin}m</span>` : "";
         const pair = p.paired_with ? `<span class="badge badge-secondary badge-xs ml-1">PAIR</span>` : "";
+        // Priority badge + skip/cancel button: mod only
+        const prio = (staffView && p.priority_match) ? `<span class="badge badge-error badge-xs ml-1">⚡ แซงคิว</span>` : "";
+        let skipBtn = '';
+        if(staffView){
+          if(p.priority_match){
+            skipBtn = `<button class="btn btn-xs btn-ghost text-red-500" onclick="event.stopPropagation();cancelSkipQueue('${p.id}')" title="ยกเลิกแซงคิว">✕</button>`;
+          } else {
+            skipBtn = `<button class="btn btn-xs btn-ghost text-orange-500" onclick="event.stopPropagation();skipQueue('${p.id}')" title="แซงคิว">⚡</button>`;
+          }
+        }
         return `
           <tr class="player-row">
             <td onclick="openProfile('${p.id}')" class="cursor-pointer">
               <div class="flex items-center gap-2">
                 <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-7 h-7 rounded-full">
                 <div class="flex flex-col leading-tight">
-                  <span class="font-bold">${p.nickname} ${pair}</span>
+                  <span class="font-bold">${p.nickname} ${pair} ${prio}</span>
                   <span class="text-[10px] text-gray-500">${p.unranked ? p.mmr_display : p.rank_title}</span>
                 </div>
               </div>
             </td>
-            <td class="text-right text-xs text-gray-500">${p.wait_min||0} นาที ${cd}</td>
+            <td class="text-right text-xs text-gray-500 whitespace-nowrap">${p.wait_min||0} นาที ${cd} ${skipBtn}</td>
           </tr>
         `;
       }).join('') : `<tr><td class="text-center text-gray-400 py-4">ยังไม่มีคนรอคิว</td></tr>`;
 
       const rList = document.getElementById('rest-list');
       rList.innerHTML = r.length ? r.map((p,i)=>{
+        // BUG FIX: show cooldown for resting players too
+        const cdSec = p.cooldown_left_sec || 0;
+        const cdMin = Math.ceil(cdSec / 60);
+        const cdLabel = cdSec > 0 ? `<span class="badge badge-warning badge-xs">CD ${cdMin}m</span>` : "";
         return `
           <tr class="player-row">
             <td onclick="openProfile('${p.id}')" class="cursor-pointer">
@@ -803,7 +943,7 @@
                 </div>
               </div>
             </td>
-            <td class="text-right text-xs text-gray-500">${p.wait_min||0} นาที</td>
+            <td class="text-right text-xs text-gray-500">${p.wait_min||0} นาที ${cdLabel}</td>
           </tr>
         `;
       }).join('') : `<tr><td class="text-center text-gray-400 py-4">ยังไม่มีคนพัก</td></tr>`;
@@ -817,9 +957,8 @@
       }
       box.classList.remove('hidden');
 
-      const me = dashboard.all_players.find(p=>p.id===user.id);
+      const me = dashboard.all_players ? dashboard.all_players.find(p=>p.id===user.id) : null;
 
-      // paired
       const pairStatus = document.getElementById('pair-status');
       const outgoingBox = document.getElementById('outgoing-box');
       const reqForm = document.getElementById('req-form');
@@ -833,31 +972,37 @@
         document.getElementById('paired-name').innerText = lookupName(me.paired_with);
       }else{
         pairStatus.classList.add('hidden');
-        reqForm.classList.remove('hidden');
+        // BUG FIX: only show request form if not already sent outgoing
+        if(me?.outgoing_req){
+          reqForm.classList.add('hidden');
+        } else {
+          reqForm.classList.remove('hidden');
+        }
       }
 
       // outgoing
       if(me?.outgoing_req && !me?.paired_with){
         outgoingBox.classList.remove('hidden');
         document.getElementById('outgoing-name').innerText = lookupName(me.outgoing_req);
-        // requester cannot request others until cancel (backend already enforces)
       }else{
         outgoingBox.classList.add('hidden');
       }
 
-      // partner select options: only queue players (not me)
+      // partner select options: queue or resting players (not me, not already paired)
       const sel = document.getElementById('partner-select');
-      const active = dashboard.all_players.filter(p => p.status === "queue" && p.id !== user.id);
+      const active = (dashboard.all_players || []).filter(p =>
+        (p.status === "queue" || p.status === "resting") && p.id !== user.id && !p.paired_with
+      );
       sel.innerHTML = `<option disabled selected>-- เลือกเพื่อน --</option>` + active.map(p=>`<option value="${p.id}">${p.nickname}</option>`).join('');
 
-      // incoming requests list
+      // incoming requests
       const incomers = (me?.incoming_reqs || []).filter(x=>x !== user.id);
       if(incomers.length){
         incomingBox.classList.remove('hidden');
         const list = document.getElementById('incoming-list');
         list.innerHTML = incomers.map(id=>{
           const nm = lookupName(id);
-          const disabled = !!me?.paired_with; // accept disabled if paired already
+          const disabled = !!me?.paired_with;
           return `
             <div class="flex items-center justify-between bg-white border rounded p-2">
               <div class="text-xs font-bold text-gray-700">${nm}</div>
@@ -874,6 +1019,7 @@
     }
 
     function lookupName(uid){
+      if(!dashboard || !dashboard.all_players) return "Unknown";
       const p = dashboard.all_players.find(x=>x.id===uid);
       return p ? p.nickname : "Unknown";
     }
@@ -927,6 +1073,9 @@
     }
 
     async function toggleSession(action){
+      if(action === "start" && dashboard.system?.is_session_active){
+        return alert("Session กำลังทำงานอยู่แล้ว");
+      }
       if(action === "end" && !confirm("ยืนยันจบก๊วน?")) return;
 
       const points = parseInt(document.getElementById('sess-points').value || "21");
@@ -938,7 +1087,18 @@
         body: JSON.stringify({userId:user.id, action, points, bo, notify})
       })).json();
 
-      if(r.error) alert(r.error);
+      if(r.error) return alert(r.error);
+
+      // Close admin panel
+      document.getElementById('modal_admin').close();
+
+      // Show prominent notification
+      if(action === "start"){
+        toast("🚀 เริ่มก๊วนแล้ว! เช็คอินได้เลย");
+      } else {
+        toast("🏁 จบก๊วนแล้ว! ขอบคุณทุกคน");
+      }
+
       await refresh();
     }
 
@@ -948,6 +1108,7 @@
         body: JSON.stringify({})
       })).json();
       if(r.error) alert(r.error);
+      else if(!r.success) toast("ยังไม่พอจับคู่ หรือคอร์ทเต็ม");
       await refresh();
     }
 
@@ -958,19 +1119,27 @@
       const s = dashboard.system?.scoring || {points:21,bo:1,cap:30};
       document.getElementById('fin-rule').innerText = `Rule: ${s.points}pts, BO${s.bo}, cap ${s.cap} (BO2: แต้มรวม)`;
 
-      // build score inputs based on BO
+      // BUG FIX: show team member names in score modal
+      const court = dashboard.courts?.[cid];
+      if(court){
+        document.getElementById('fin-team-a').innerText = "A: " + court.team_a.map(p=>p.nickname).join(', ');
+        document.getElementById('fin-team-b').innerText = "B: " + court.team_b.map(p=>p.nickname).join(', ');
+      }
+
       const box = document.getElementById('score-inputs');
       box.innerHTML = "";
 
       const bo = parseInt(s.bo || 1);
+      // BUG FIX: for BO3, show 3 sets but mark set 3 as optional
       for(let i=1;i<=bo;i++){
+        const optional = (bo === 3 && i === 3);
         const row = document.createElement('div');
         row.className = "bg-slate-50 border rounded p-2";
         row.innerHTML = `
-          <div class="text-xs font-bold text-gray-600 mb-1">Set ${i}</div>
+          <div class="text-xs font-bold text-gray-600 mb-1">Set ${i} ${optional ? '<span class="text-gray-400 font-normal">(ถ้าเสมอ 1-1)</span>' : ''}</div>
           <div class="grid grid-cols-2 gap-2">
-            <input class="input input-bordered input-sm" id="set${i}a" type="number" placeholder="A">
-            <input class="input input-bordered input-sm" id="set${i}b" type="number" placeholder="B">
+            <input class="input input-bordered input-sm" id="set${i}a" type="number" placeholder="A" min="0">
+            <input class="input input-bordered input-sm" id="set${i}b" type="number" placeholder="B" min="0">
           </div>
         `;
         box.appendChild(row);
@@ -1001,7 +1170,19 @@
       for(let i=1;i<=bo;i++){
         const a = document.getElementById(`set${i}a`).value;
         const b = document.getElementById(`set${i}b`).value;
-        set_scores.push({a: a, b: b});
+        // BUG FIX: skip empty sets (e.g. BO3 set 3 not played)
+        if(a === "" && b === ""){
+          continue;
+        }
+        // BUG FIX: validate both fields filled if one is
+        if((a === "" && b !== "") || (a !== "" && b === "")){
+          return alert(`Set ${i}: กรอกคะแนนให้ครบทั้ง 2 ช่อง`);
+        }
+        set_scores.push({a: parseInt(a), b: parseInt(b)});
+      }
+
+      if(set_scores.length === 0){
+        return alert("กรุณากรอกคะแนนอย่างน้อย 1 เซต");
       }
 
       const r = await (await fetch('/api/match/submit',{
@@ -1009,8 +1190,9 @@
         body: JSON.stringify({userId:user.id, courtId: selectedCid, set_scores})
       })).json();
 
-      if(r.error) alert(r.error);
+      if(r.error) return alert(r.error);
       document.getElementById('modal_finish').close();
+      toast(`Team ${r.winner} ชนะ!`);
       await refresh();
     }
 
@@ -1018,15 +1200,23 @@
       const total = Object.keys(dashboard.courts||{}).length || 2;
       const sel = document.getElementById('man-court');
       sel.innerHTML = "";
+      // BUG FIX: only show empty courts
       for(let i=1;i<=total;i++){
-        sel.innerHTML += `<option value="${i}">Court ${i}</option>`;
+        const cid = String(i);
+        if(dashboard.courts[cid] === null || dashboard.courts[cid] === undefined){
+          sel.innerHTML += `<option value="${i}">Court ${i}</option>`;
+        }
       }
-      // fill select players (queue only)
-      const act = dashboard.all_players.filter(p => p.status === "queue");
+      if(sel.innerHTML === ""){
+        return alert("ไม่มีคอร์ทว่าง");
+      }
+
+      // BUG FIX: show all active players (queue + resting), not just queue
+      const act = (dashboard.all_players || []).filter(p => p.status === "queue" || p.status === "resting");
       const selects = ["man-p1","man-p2","man-p3","man-p4"];
       selects.forEach(id=>{
         const s = document.getElementById(id);
-        s.innerHTML = `<option value="">-- เลือก --</option>` + act.map(p=>`<option value="${p.id}">${p.nickname}</option>`).join('');
+        s.innerHTML = `<option value="">-- เลือก --</option>` + act.map(p=>`<option value="${p.id}">${p.nickname} (${p.unranked ? 'UNRANK' : p.mmr})</option>`).join('');
       });
       document.getElementById('modal_manual_match').showModal();
     }
@@ -1058,63 +1248,247 @@
     function renderEvents(){
       const box = document.getElementById('events-list');
       const events = dashboard.events || [];
-      box.innerHTML = events.length ? events.map(e=>{
+      if(!events.length){
+        box.innerHTML = `<div class="text-center text-gray-400 py-8">ไม่มี events</div>`;
+        return;
+      }
+
+      box.innerHTML = events.map(e=>{
         const canDel = isStaff();
-        const pCount = (e.participants_public||[]).length;
         const status = e.status || "open";
-        return `
-          <div class="bg-white border rounded p-3 shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <div class="font-black text-gray-800">${e.name}</div>
-                <div class="text-xs text-gray-500">${formatDate(e.datetime)} · ${status.toUpperCase()} · คน: ${pCount}</div>
+        const statusColor = status === "active" ? "badge-success" : (status === "ended" ? "badge-ghost" : "badge-info");
+        const borderColor = status === "active" ? "border-green-400 border-2" : (status === "open" ? "border-blue-300 border" : "border");
+        const bgColor = status === "active" ? "bg-green-50" : "bg-white";
+
+        const scoring = e.scoring || {points:21, bo:1};
+        const loc = e.location || "";
+
+        // Pre-registered (only for open events)
+        const preReg = e.pre_registered_public || [];
+        // Participants (played in active/ended events)
+        const parts = e.participants_public || [];
+
+        // Join/Leave button: only for open (future scheduled) events
+        const myPreReg = (e.pre_registered || []);
+        const iJoined = myPreReg.includes(user.id);
+        const joinBtn = status === "open"
+          ? (iJoined
+            ? `<button class="btn btn-xs btn-outline btn-error" onclick="leaveEvent('${e.id}')"><i class="fa-solid fa-right-from-bracket mr-1"></i>ยกเลิก</button>`
+            : `<button class="btn btn-xs btn-primary" onclick="joinEvent('${e.id}')"><i class="fa-solid fa-right-to-bracket mr-1"></i>Join</button>`)
+          : '';
+
+        // Countdown for open future events
+        const countdownSec = e.countdown_sec || 0;
+        const countdownHtml = (status === "open" && countdownSec > 0)
+          ? `<div class="event-countdown text-center mt-2 py-2 bg-blue-50 rounded-lg" data-evt-target="${parseFloat(e.datetime||0)}">
+               <span class="text-xs text-blue-500 font-bold">⏳ เริ่มใน </span>
+               <span class="countdown-text text-sm font-black text-blue-700">${formatCountdown(countdownSec)}</span>
+             </div>`
+          : '';
+
+        // Settings badge
+        const settingsBadge = `<span class="text-xs text-gray-400">${scoring.points}แต้ม · BO${scoring.bo}</span>`;
+
+        // Location
+        const locHtml = loc ? `<div class="text-xs text-gray-500 mt-0.5">📍 ${loc}</div>` : '';
+
+        // End time display
+        const endDt = e.end_datetime;
+        const endTimeHtml = endDt ? `<div class="text-xs text-gray-400 mt-0.5">🏁 จบ: ${formatDate(endDt)}</div>` : '';
+
+        // Auto-close countdown for active events
+        const autoCloseSec = e.auto_close_sec;
+        const autoCloseHtml = (status === "active" && autoCloseSec != null && autoCloseSec > 0)
+          ? `<div class="text-xs text-orange-500 mt-1">🔒 ปิด session อัตโนมัติใน ${formatCountdown(autoCloseSec)}</div>`
+          : '';
+
+        // Render people section
+        function renderPeople(list, label, bgCls){
+          if(!list.length) return '';
+          return `
+            <div class="mt-2">
+              <div class="text-xs font-bold text-gray-500 mb-1">${label} (${list.length})</div>
+              <div class="flex flex-wrap gap-1.5">
+                ${list.map(p=>`
+                  <div class="flex items-center gap-1 ${bgCls} border rounded-full px-2 py-0.5 text-xs cursor-pointer" onclick="openProfile('${p.id}')">
+                    <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
+                    <span class="font-bold">${p.nickname}</span>
+                  </div>
+                `).join('')}
               </div>
-              ${canDel ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')"><i class="fa-solid fa-trash"></i></button>` : ``}
+            </div>`;
+        }
+
+        const preRegHtml = renderPeople(preReg, "🙋 ลงชื่อล่วงหน้า", "bg-blue-50");
+        const partsHtml = renderPeople(parts, "🏸 ผู้เล่น", "bg-slate-50");
+
+        return `
+          <div class="${bgColor} ${borderColor} rounded-xl p-3 shadow-sm">
+            <div class="flex justify-between items-start">
+              <div class="flex-1 min-w-0">
+                <div class="font-black text-gray-800 truncate">${status === "active" ? "🟢 " : ""}${e.name}</div>
+                <div class="text-xs text-gray-500">${formatDate(e.datetime)} · <span class="badge badge-xs ${statusColor}">${status.toUpperCase()}</span> · ${settingsBadge}</div>
+                ${locHtml}
+                ${endTimeHtml}
+                ${autoCloseHtml}
+              </div>
+              <div class="flex items-center gap-1 shrink-0 ml-2">
+                ${joinBtn}
+                ${canDel ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')"><i class="fa-solid fa-trash"></i></button>` : ``}
+              </div>
             </div>
-            <div class="mt-2 flex flex-wrap gap-2">
-              ${(e.participants_public||[]).slice(0,10).map(p=>`
-                <div class="flex items-center gap-1 bg-slate-50 border rounded-full px-2 py-1 text-xs cursor-pointer" onclick="openProfile('${p.id}')">
-                  <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-4 h-4 rounded-full">
-                  <span class="font-bold">${p.nickname}</span>
-                </div>
-              `).join('')}
-              ${pCount>10 ? `<span class="text-xs text-gray-400">+${pCount-10}</span>`:''}
-            </div>
+            ${countdownHtml}
+            ${preRegHtml}
+            ${partsHtml}
           </div>
         `;
-      }).join('') : `<div class="text-center text-gray-400">ไม่มี events</div>`;
+      }).join('');
+    }
 
-      // super admin mod list
-      if(user && user.role === "super"){
-        const tbl = document.getElementById('admin-user-list');
-        tbl.innerHTML = (dashboard.all_players||[]).map(p=>{
-          const checked = (dashboard.system && (dashboard.system.mod_ids || [])) ? "" : ""; // not used
-          const isMod = (dashboard.all_players.find(x=>x.id===p.id)?.is_mod); // not available; we'll compute from role lists on server? simplified:
-          const modNow = false; // UI will refresh from backend manage_mod
-          return `
-            <tr>
-              <td>${p.nickname}</td>
-              <td class="text-right">
-                <button class="btn btn-xs btn-outline" onclick="openEditMMR('${p.id}')">MMR</button>
-              </td>
-            </tr>
-          `;
-        }).join('');
-      }
+    function formatCountdown(sec){
+      if(sec <= 0) return "เริ่มแล้ว!";
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      let parts = [];
+      if(d > 0) parts.push(`${d} วัน`);
+      if(h > 0) parts.push(`${h} ชม.`);
+      parts.push(`${m} นาที`);
+      return parts.join(' ');
+    }
+
+    // BUG FIX: complete admin user list with promote/demote + MMR edit
+    function renderAdminUserList(){
+      if(!user || user.role !== "super") return;
+      const tbl = document.getElementById('admin-user-list');
+      if(!tbl) return;
+      const modIds = dashboard.mod_ids || [];
+
+      tbl.innerHTML = (dashboard.all_players||[]).map(p=>{
+        const isMod = modIds.includes(p.id);
+        const isSuperAdmin = p.id === "U1cf933e3a1559608c50c0456f6583dc9";
+        const roleBadge = isSuperAdmin ? '<span class="badge badge-error badge-xs">SUPER</span>'
+          : isMod ? '<span class="badge badge-warning badge-xs">MOD</span>'
+          : '<span class="badge badge-ghost badge-xs">USER</span>';
+
+        const actions = isSuperAdmin ? '' : `
+          ${isMod
+            ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="manageMod('${p.id}','demote')">ถอด Mod</button>`
+            : `<button class="btn btn-xs btn-ghost text-blue-500" onclick="manageMod('${p.id}','promote')">ตั้ง Mod</button>`
+          }
+          <button class="btn btn-xs btn-ghost text-orange-500" onclick="openEditMMR('${p.id}')">MMR</button>
+        `;
+
+        return `
+          <tr>
+            <td>
+              <div class="flex items-center gap-1">
+                <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
+                <span class="font-bold text-xs">${p.nickname}</span>
+              </div>
+            </td>
+            <td>${roleBadge}</td>
+            <td class="text-right">${actions}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // BUG FIX: add manageMod function
+    async function manageMod(targetId, action){
+      const actionText = action === "promote" ? "ตั้งเป็น Mod" : "ถอดจาก Mod";
+      if(!confirm(`${actionText}: ${lookupName(targetId)}?`)) return;
+
+      const r = await (await fetch('/api/admin/manage_mod',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({requesterId: user.id, targetUserId: targetId, action})
+      })).json();
+      if(r.error) alert(r.error);
+      else toast(`${actionText}สำเร็จ`);
+      await refresh();
+    }
+
+    // BUG FIX: add openEditMMR function
+    function openEditMMR(uid){
+      const p = (dashboard.all_players||[]).find(x=>x.id===uid);
+      if(!p) return alert("ไม่พบผู้เล่น");
+      document.getElementById('edit-mmr-name').innerText = p.nickname;
+      document.getElementById('edit-mmr-current').innerText = p.unranked ? p.mmr_display : p.mmr;
+      document.getElementById('edit-mmr-input').value = p.mmr;
+      document.getElementById('edit-mmr-uid').value = uid;
+      document.getElementById('modal_edit_mmr').showModal();
+    }
+
+    // BUG FIX: add confirmSetMMR function
+    async function confirmSetMMR(){
+      const uid = document.getElementById('edit-mmr-uid').value;
+      const newMmr = document.getElementById('edit-mmr-input').value;
+      if(!uid || !newMmr) return alert("กรอกข้อมูลให้ครบ");
+
+      const r = await (await fetch('/api/admin/set_mmr',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({requesterId: user.id, targetUserId: uid, newMmr: parseInt(newMmr)})
+      })).json();
+      if(r.error) alert(r.error);
+      else toast("แก้ MMR สำเร็จ");
+      document.getElementById('modal_edit_mmr').close();
+      await refresh();
+    }
+
+    // BUG FIX: render mod MMR select dropdown
+    function renderModMMRSelect(){
+      const sel = document.getElementById('mmr-target-select');
+      if(!sel) return;
+      const players = dashboard.all_players || [];
+      sel.innerHTML = `<option disabled selected>-- เลือกผู้เล่น --</option>` +
+        players.map(p=>`<option value="${p.id}">${p.nickname} (${p.unranked ? 'UNRANK' : p.mmr})</option>`).join('');
+    }
+
+    // BUG FIX: add submitSetMMR for mod-level MMR edit
+    async function submitSetMMR(){
+      const uid = document.getElementById('mmr-target-select').value;
+      const newMmr = document.getElementById('mmr-new-value').value;
+      if(!uid || !newMmr) return alert("เลือกผู้เล่นและกรอก MMR");
+
+      const r = await (await fetch('/api/admin/set_mmr',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({requesterId: user.id, targetUserId: uid, newMmr: parseInt(newMmr)})
+      })).json();
+      if(r.error) alert(r.error);
+      else toast("แก้ MMR สำเร็จ");
+      await refresh();
     }
 
     async function submitNewEvent(){
-      const n = document.getElementById('evt-name').value;
+      const n = document.getElementById('evt-name').value.trim();
       const t = document.getElementById('evt-time').value;
-      if(!n || !t) return alert("กรอกชื่อและเวลา");
+      const tEnd = document.getElementById('evt-end-time').value;
+      const loc = document.getElementById('evt-location').value.trim();
+      const pts = parseInt(document.getElementById('evt-points').value || "21");
+      const bo = parseInt(document.getElementById('evt-bo').value || "1");
+      const notify = document.getElementById('evt-notify').checked;
+
+      if(!t) return alert("กรุณาระบุเวลาเริ่ม");
       const ts = new Date(t).getTime()/1000;
+      const endTs = tEnd ? new Date(tEnd).getTime()/1000 : null;
+
+      if(endTs && endTs <= ts) return alert("เวลาสิ้นสุดต้องหลังเวลาเริ่ม");
+
+      const body = {userId:user.id, datetime:ts, points:pts, bo:bo, notify:notify};
+      if(n) body.name = n;
+      if(loc) body.location = loc;
+      if(endTs) body.end_datetime = endTs;
+
       const r = await (await fetch('/api/event/create',{
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({userId:user.id, name:n, datetime:ts})
+        body: JSON.stringify(body)
       })).json();
-      if(r.error) alert(r.error);
+      if(r.error) return alert(r.error);
+      toast("สร้าง Event สำเร็จ!");
       document.getElementById('evt-name').value = "";
       document.getElementById('evt-time').value = "";
+      document.getElementById('evt-end-time').value = "";
+      document.getElementById('evt-location').value = "";
       await refresh();
     }
 
@@ -1125,6 +1499,52 @@
         body: JSON.stringify({userId:user.id, eventId:eid})
       })).json();
       if(r.error) alert(r.error);
+      await refresh();
+    }
+
+    async function joinEvent(eid){
+      const r = await (await fetch('/api/event/join',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, eventId:eid})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("เข้าร่วมแล้ว!");
+      await refresh();
+    }
+
+    async function leaveEvent(eid){
+      if(!confirm("ยกเลิกเข้าร่วม?")) return;
+      const r = await (await fetch('/api/event/leave',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, eventId:eid})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("ยกเลิกเข้าร่วมแล้ว");
+      await refresh();
+    }
+
+    async function skipQueue(targetId){
+      if(!confirm("แซงคิวให้ผู้เล่นนี้?")) return;
+      const r = await (await fetch('/api/admin/skip_queue',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, targetId:targetId})
+      })).json();
+      if(r.error) return alert(r.error);
+      if(r.auto_matched){
+        toast("⚡ แซงคิวสำเร็จ! จับคู่แล้ว");
+      } else {
+        toast("⚡ ตั้ง Priority แล้ว (รอคนเพียงพอ)");
+      }
+      await refresh();
+    }
+
+    async function cancelSkipQueue(targetId){
+      const r = await (await fetch('/api/admin/cancel_skip_queue',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, targetId:targetId})
+      })).json();
+      if(r.error) return alert(r.error);
+      toast("ยกเลิกแซงคิวแล้ว");
       await refresh();
     }
 
@@ -1141,21 +1561,24 @@
         if(lbMode === "mmr"){
           right = `<div class="font-black text-indigo-600">${p.unranked ? p.mmr_display : p.mmr}</div>`;
         }else if(lbMode === "points"){
-          const raw = dashboard.all_players.find(x=>x.id===p.id);
-          const pts = (raw && raw.id) ? (getPlayerRaw(p.id)?.points_for || 0) : 0;
-          right = `<div class="font-black text-indigo-600">${pts}</div>`;
+          // BUG FIX: use points_for directly from player data (now included in dashboard)
+          right = `<div class="font-black text-indigo-600">${p.points_for || 0}</div>`;
         }else{
           right = `<div class="badge ${p.wr_badge}">WR ${p.wr}%</div>`;
         }
 
+        // BUG FIX: highlight current user in leaderboard
+        const isMe = p.id === user.id;
+        const rowClass = isMe ? "player-row bg-indigo-50" : "player-row";
+
         return `
-          <tr class="player-row">
+          <tr class="${rowClass}">
             <td onclick="openProfile('${p.id}')" class="cursor-pointer">
               <div class="flex items-center gap-2">
                 <div class="text-xs font-black text-gray-500 w-6">${i+1}</div>
                 <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-8 h-8 rounded-full">
                 <div class="flex flex-col leading-tight">
-                  <span class="font-bold">${p.nickname}</span>
+                  <span class="font-bold">${p.nickname} ${isMe ? '⭐' : ''}</span>
                   <span class="text-[10px] text-gray-500">${p.unranked ? p.mmr_display : p.rank_title}</span>
                 </div>
               </div>
@@ -1166,15 +1589,10 @@
       }).join('');
     }
 
-    function getPlayerRaw(uid){
-      // find raw in dashboard by calling /api/player? not needed; best effort:
-      // we can’t access points_for here unless we request /api/player; keep minimal:
-      return null;
-    }
-
     // History
     function renderHistory(){
       const box = document.getElementById('history-list');
+      try {
       const hist = dashboard.history || [];
       if(!hist.length){
         box.innerHTML = `<div class="text-center text-gray-400 py-6">ยังไม่มีประวัติ</div>`;
@@ -1182,8 +1600,8 @@
       }
 
       const renderTeam = (ids) => ids.map(uid=>{
-        const p = dashboard.all_players.find(x=>x.id===uid);
-        if(!p) return '';
+        const p = (dashboard.all_players||[]).find(x=>x.id===uid);
+        if(!p) return `<div class="text-xs text-gray-400">Unknown</div>`;
         return `
           <div class="flex items-center gap-2 cursor-pointer" onclick="openProfile('${uid}')">
             <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-6 h-6 rounded-full">
@@ -1197,14 +1615,20 @@
 
       const myId = user.id;
       const filtered = hist.filter(m=>{
+        if(!m) return false;
         if(historyMode === "global") return true;
-        return (m.team_a_ids.includes(myId) || m.team_b_ids.includes(myId));
+        return ((m.team_a_ids||[]).includes(myId) || (m.team_b_ids||[]).includes(myId));
       });
 
-      box.innerHTML = filtered.map(m=>{
+      if(!filtered.length){
+        box.innerHTML = `<div class="text-center text-gray-400 py-6">${historyMode==='my' ? 'ยังไม่มีประวัติของคุณ' : 'ยังไม่มีประวัติ'}</div>`;
+        return;
+      }
+
+      box.innerHTML = filtered.filter(m=>m).map(m=>{
         const winSide = m.winner;
-        const isMeA = m.team_a_ids.includes(myId);
-        const isMeB = m.team_b_ids.includes(myId);
+        const isMeA = (m.team_a_ids||[]).includes(myId);
+        const isMeB = (m.team_b_ids||[]).includes(myId);
         const meSide = isMeA ? "A" : (isMeB ? "B" : null);
         const iWon = meSide ? (meSide === winSide) : null;
 
@@ -1216,20 +1640,24 @@
         const scoreLine = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(' | ');
         const durMin = Math.floor((m.duration_sec||0)/60);
 
+        // BUG FIX: highlight winning team in history
+        const teamAWon = winSide === "A";
+        const teamBWon = winSide === "B";
+
         return `
           <div class="bg-white border rounded p-3 shadow-sm">
             <div class="flex justify-between items-center mb-2">
-              <div class="text-xs text-gray-500">${new Date((m.end_at||m.created_at||0)*1000).toLocaleString('th-TH',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})} · ${durMin}m</div>
+              <div class="text-xs text-gray-500">${new Date((m.end_at||m.created_at||0)*1000).toLocaleString('th-TH',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})} · ${durMin}m · Court ${m.court_id||'?'}</div>
               <div class="flex items-center gap-2">
-                ${historyMode === "my" && meSide ? `<span class="badge ${iWon?'badge-success':'badge-error'}">${iWon?'WIN':'LOSS'}</span>` : ``}
-                ${historyMode === "global" ? `<span class="badge badge-outline">WIN ${winSide}</span>` : ``}
+                ${historyMode === "my" && meSide ? `<span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>` : ``}
+                ${historyMode === "global" ? `<span class="badge badge-outline badge-sm">WIN ${winSide}</span>` : ``}
                 ${deltaHtml}
               </div>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
-              <div class="space-y-2">${renderTeam(m.team_a_ids)}</div>
-              <div class="space-y-2">${renderTeam(m.team_b_ids)}</div>
+              <div class="space-y-2 ${teamAWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_a_ids||[])}</div>
+              <div class="space-y-2 ${teamBWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_b_ids||[])}</div>
             </div>
 
             <div class="mt-2 text-xs text-gray-600 flex justify-between">
@@ -1239,11 +1667,11 @@
           </div>
         `;
       }).join('');
+      } catch(e) { console.error("renderHistory error:", e); box.innerHTML = `<div class="text-center text-gray-400 py-6">ไม่สามารถโหลดประวัติได้</div>`; }
     }
 
     // Billing
     async function openBillingModal(){
-      // events newest first already
       const select = document.getElementById('bill-event-select');
       const events = dashboard.events || [];
       select.innerHTML = '<option disabled selected>-- เลือก Session --</option>';
@@ -1335,56 +1763,78 @@
       });
       txt += `------------------\nโอนแล้วส่งสลิปด้วยนะจ๊ะ 😘`;
 
-      navigator.clipboard.writeText(txt).then(()=>toast("คัดลอกแล้ว!"));
+      navigator.clipboard.writeText(txt).then(()=>toast("คัดลอกแล้ว!")).catch(()=>{
+        // BUG FIX: fallback for clipboard API not available
+        const ta = document.createElement('textarea');
+        ta.value = txt;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast("คัดลอกแล้ว!");
+      });
     }
 
     // Profile modal
     async function openProfile(uid){
-      const r = await (await fetch(`/api/player/${uid}`)).json();
-      if(r.error) return alert(r.error);
+      try {
+        const r = await (await fetch(`/api/player/${uid}`)).json();
+        if(r.error) return alert(r.error);
 
-      document.getElementById('pf-pic').src = r.pictureUrl || "https://ui-avatars.com/api/?name=User";
-      document.getElementById('pf-name').innerText = r.nickname;
-      document.getElementById('pf-mmr').innerText = r.unranked ? r.mmr_display : `MMR ${r.mmr}`;
-      document.getElementById('pf-rank').className = `badge ${r.rank_color||'badge-primary'}`;
-      document.getElementById('pf-rank').innerText = r.unranked ? r.mmr_display : r.rank_title;
-      document.getElementById('pf-wr').className = `badge ${r.wr_badge||'badge-ghost'}`;
-      document.getElementById('pf-wr').innerText = `WR ${r.wr||0}%`;
+        document.getElementById('pf-pic').src = r.pictureUrl || "https://ui-avatars.com/api/?name=User";
+        document.getElementById('pf-name').innerText = r.nickname;
+        document.getElementById('pf-mmr').innerText = r.unranked ? r.mmr_display : `MMR ${r.mmr}`;
+        document.getElementById('pf-rank').className = `badge ${r.rank_color||'badge-primary'}`;
+        document.getElementById('pf-rank').innerText = r.unranked ? r.mmr_display : r.rank_title;
+        document.getElementById('pf-wr').className = `badge ${r.wr_badge||'badge-ghost'}`;
+        document.getElementById('pf-wr').innerText = `WR ${r.wr||0}%`;
 
-      const prog = r.progress || {pct:0,label:"",type:"mmr"};
-      document.getElementById('pf-progress').value = prog.pct || 0;
-      document.getElementById('pf-progress-label').innerText = prog.label || "";
-      document.getElementById('pf-progress-hint').innerText = prog.type==="calib" ? "calibrating" : (prog.to_up!=null?`to up: ${prog.to_up}`:"");
+        const prog = r.progress || {pct:0,label:"",type:"mmr"};
+        document.getElementById('pf-progress').value = prog.pct || 0;
+        document.getElementById('pf-progress-label').innerText = prog.label || "";
+        document.getElementById('pf-progress-hint').innerText = prog.type==="calib" ? "calibrating" : (prog.to_up!=null?`to up: ${prog.to_up}`:"");
 
-      document.getElementById('pf-sets').innerText = `${r.stats.sets_w}/${r.stats.sets_l}`;
-      document.getElementById('pf-matches').innerText = `${r.stats.match_w}/${r.stats.match_l}`;
-      document.getElementById('pf-pf').innerText = r.stats.points_for;
-      document.getElementById('pf-pa').innerText = r.stats.points_against;
+        document.getElementById('pf-sets').innerText = `${r.stats.sets_w}/${r.stats.sets_l}`;
+        document.getElementById('pf-matches').innerText = `${r.stats.match_w}/${r.stats.match_l}`;
+        document.getElementById('pf-pf').innerText = r.stats.points_for;
+        document.getElementById('pf-pa').innerText = r.stats.points_against;
 
-      const lastBox = document.getElementById('pf-last10');
-      const last = r.last10 || [];
-      if(!last.length){
-        lastBox.innerHTML = `<div class="text-center text-gray-400 py-3">ไม่มีประวัติ</div>`;
-      }else{
-        lastBox.innerHTML = last.map(m=>{
-          const isA = m.team_a_ids.includes(r.id);
-          const meSide = isA ? "A" : "B";
-          const iWon = m.winner === meSide;
-          const delta = (m.mmr_changes && m.mmr_changes[r.id]!=null) ? m.mmr_changes[r.id] : 0;
-          const score = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(" | ");
-          return `
-            <div class="bg-slate-50 border rounded p-2 text-xs">
-              <div class="flex justify-between items-center">
-                <span class="badge ${iWon?'badge-success':'badge-error'}">${iWon?'WIN':'LOSS'}</span>
-                <span class="font-black ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>
+        const lastBox = document.getElementById('pf-last10');
+        const last = r.last10 || [];
+        if(!last.length){
+          lastBox.innerHTML = `<div class="text-center text-gray-400 py-3">ไม่มีประวัติ</div>`;
+        }else{
+          lastBox.innerHTML = last.filter(m=>m&&m.team_a_ids&&m.team_b_ids).map(m=>{
+            const isA = (m.team_a_ids||[]).includes(r.id);
+            const meSide = isA ? "A" : "B";
+            const iWon = m.winner === meSide;
+            const delta = (m.mmr_changes && m.mmr_changes[r.id]!=null) ? m.mmr_changes[r.id] : 0;
+            const score = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(" | ");
+
+            // BUG FIX: show teammate and opponent names
+            const teammates = (isA ? (m.team_a_ids||[]) : (m.team_b_ids||[])).filter(id=>id!==r.id);
+            const opponents = isA ? (m.team_b_ids||[]) : (m.team_a_ids||[]);
+            const tmName = teammates.map(id=>lookupName(id)).join(', ');
+            const oppName = opponents.map(id=>lookupName(id)).join(', ');
+
+            return `
+              <div class="bg-slate-50 border rounded p-2 text-xs">
+                <div class="flex justify-between items-center">
+                  <span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>
+                  <span class="font-black ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>
+                </div>
+                <div class="text-gray-500 mt-1">คู่: ${tmName || '-'} | vs ${oppName || '-'}</div>
+                <div class="text-gray-600 mt-1">Score: ${score} · Total: ${m.total_points_a}-${m.total_points_b}</div>
               </div>
-              <div class="text-gray-600 mt-1">Score: ${score} · Total: ${m.total_points_a}-${m.total_points_b} · Court ${m.court_id}</div>
-            </div>
-          `;
-        }).join('');
-      }
+            `;
+          }).join('');
+        }
 
-      document.getElementById('modal_profile').showModal();
+        document.getElementById('modal_profile').showModal();
+      } catch(e) {
+        console.error("openProfile error:", e);
+        alert("เกิดข้อผิดพลาด");
+      }
     }
 
     main();
