@@ -1806,16 +1806,30 @@
       });
       txt += `------------------\nโอนแล้วส่งสลิปด้วยนะจ๊ะ 😘`;
 
-      navigator.clipboard.writeText(txt).then(()=>toast("คัดลอกแล้ว!")).catch(()=>{
-        // BUG FIX: fallback for clipboard API not available
+      function fallbackCopy(text){
         const ta = document.createElement('textarea');
-        ta.value = txt;
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-        toast("คัดลอกแล้ว!");
-      });
+      }
+
+      try {
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(txt).then(()=>toast("📋 คัดลอกแล้ว!")).catch(()=>{
+            fallbackCopy(txt);
+            toast("📋 คัดลอกแล้ว!");
+          });
+        } else {
+          fallbackCopy(txt);
+          toast("📋 คัดลอกแล้ว!");
+        }
+      } catch(e) {
+        fallbackCopy(txt);
+        toast("📋 คัดลอกแล้ว!");
+      }
     }
 
     // Profile modal
