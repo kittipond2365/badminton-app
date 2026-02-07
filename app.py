@@ -5,10 +5,13 @@ import uuid
 import math
 import threading
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
+
+# Thailand timezone (UTC+7)
+TH_TZ = timezone(timedelta(hours=7))
 
 # =========================
 # Render-friendly settings
@@ -255,18 +258,24 @@ def _touch_participant(db, uid):
     if uid not in parts:
         parts.append(uid)
 
-def _create_event(db, name, dt_ts=None, status="active"):
+def _create_event(db, name, dt_ts=None, status="active", scoring=None, location="", notify=False):
     eid = str(uuid.uuid4())[:8]
     if dt_ts is None:
         dt_ts = _now()
+    if scoring is None:
+        scoring = {"points": 21, "bo": 1, "cap": 30}
     db["events"][eid] = {
         "id": eid,
         "name": name,
         "datetime": float(dt_ts),
         "created_ts": float(_now()),
         "status": status,              # open|active|ended
-        "participants": [],
-        "matches": []
+        "participants": [],            # played in session
+        "pre_registered": [],          # signed up beforehand (open events)
+        "matches": [],
+        "scoring": scoring,
+        "location": location,
+        "notify": notify
     }
     return eid
 
@@ -765,6 +774,32 @@ def _cooldown_minutes(db):
         cd = 0
     return cd
 
+def _maybe_auto_start_scheduled_event(db):
+    """Check if any open event's scheduled time has arrived → auto-start session."""
+    if db["system_settings"].get("is_session_active"):
+        return False  # already running
+
+    now = _now()
+    for eid, evt in db["events"].items():
+        if evt.get("status") != "open":
+            continue
+        evt_time = float(evt.get("datetime", 0))
+        if evt_time <= 0 or evt_time > now:
+            continue
+
+        # Time has arrived! Auto-start session with this event's settings
+        scoring = evt.get("scoring", {"points": 21, "bo": 1, "cap": 30})
+        notify = evt.get("notify", False)
+
+        db["system_settings"]["is_session_active"] = True
+        db["system_settings"]["notify_enabled"] = notify
+        db["system_settings"]["scoring"] = scoring
+        db["system_settings"]["current_event_id"] = eid
+        evt["status"] = "active"
+
+        return True
+    return False
+
 # =========================
 # Public API shaping
 # =========================
@@ -904,7 +939,11 @@ def get_dashboard():
 
     # run automatch opportunistically
     changed = _maybe_run_automatch(db)
-    if changed:
+
+    # check if any scheduled event should auto-start
+    auto_started = _maybe_auto_start_scheduled_event(db)
+
+    if changed or auto_started:
         save_db(db)
 
     now = _now()
@@ -932,16 +971,43 @@ def get_dashboard():
     queue.sort(key=lambda x: float(x.get("queue_join_ts", now)))
     resting.sort(key=lambda x: float(x.get("queue_join_ts", now)))
 
-    # events sorted newest first
+    # events: active first, then by datetime newest
     events = list(db["events"].values())
+    now_ts = _now()
     for e in events:
-        e["sort_key"] = float(e.get("datetime", 0))
+        # participants (played in session)
         joined = []
         for uid in e.get("participants", []):
             if uid in db["players"]:
                 joined.append(_public_player_min(db, db["players"][uid]))
         e["participants_public"] = joined
-    events.sort(key=lambda x: x.get("sort_key", 0), reverse=True)
+
+        # pre-registered (signed up beforehand)
+        pre_pub = []
+        for uid in e.get("pre_registered", []):
+            if uid in db["players"]:
+                pre_pub.append(_public_player_min(db, db["players"][uid]))
+        e["pre_registered_public"] = pre_pub
+
+        # countdown seconds for open future events
+        evt_dt = float(e.get("datetime", 0))
+        e["countdown_sec"] = int(max(0, evt_dt - now_ts)) if evt_dt > now_ts else 0
+
+        # ensure scoring/location exist for older events
+        e.setdefault("scoring", {"points": 21, "bo": 1, "cap": 30})
+        e.setdefault("location", "")
+
+    # Sort: active first, then open (nearest future first), then ended (newest first)
+    def event_sort_key(e):
+        status = e.get("status", "open")
+        dt = float(e.get("datetime", 0))
+        if status == "active":
+            return (0, -dt)
+        elif status == "open":
+            return (1, dt)   # nearest future first
+        else:
+            return (2, -dt)  # ended newest first
+    events.sort(key=event_sort_key)
 
     # leaderboards
     def lb_mmr_key(p):
@@ -1407,19 +1473,28 @@ def admin_toggle_session():
         points = int(d.get("points", 21))
         bo = int(d.get("bo", 1))
         notify = bool(d.get("notify", False))
+        event_id = d.get("eventId")  # if starting from a scheduled event
 
         if points not in [11, 21]:
             points = 21
         if bo not in [1,2,3]:
             bo = 1
 
+        scoring = {"points": points, "bo": bo, "cap": 30}
         db["system_settings"]["is_session_active"] = True
         db["system_settings"]["notify_enabled"] = notify
-        db["system_settings"]["scoring"] = {"points": points, "bo": bo, "cap": 30}
+        db["system_settings"]["scoring"] = scoring
 
-        today = datetime.now().strftime("%d/%m/%Y")
-        eid = _create_event(db, name=f"ก๊วน {today}", dt_ts=_now(), status="active")
-        db["system_settings"]["current_event_id"] = eid
+        if event_id and event_id in db["events"]:
+            # Activate existing scheduled event
+            evt = db["events"][event_id]
+            evt["status"] = "active"
+            db["system_settings"]["current_event_id"] = event_id
+        else:
+            # Create new event with Thailand timezone name
+            today_th = datetime.now(TH_TZ).strftime("%d/%m/%Y")
+            eid = _create_event(db, name=f"ก๊วน {today_th}", dt_ts=_now(), status="active", scoring=scoring, notify=notify)
+            db["system_settings"]["current_event_id"] = eid
 
     else:
         db["system_settings"]["is_session_active"] = False
@@ -1531,7 +1606,19 @@ def event_create():
         dt = float(dt)
     except Exception:
         dt = _now()
-    eid = _create_event(db, name=name, dt_ts=dt, status="open")
+
+    # Scoring settings
+    points = int(d.get("points", 21))
+    bo = int(d.get("bo", 1))
+    notify = bool(d.get("notify", False))
+    location = d.get("location", "")
+    if points not in [11, 21]:
+        points = 21
+    if bo not in [1, 2, 3]:
+        bo = 1
+    scoring = {"points": points, "bo": bo, "cap": 30}
+
+    eid = _create_event(db, name=name, dt_ts=dt, status="open", scoring=scoring, location=location, notify=notify)
     save_db(db)
     return jsonify({"success": True, "eventId": eid})
 
@@ -1565,9 +1652,13 @@ def event_join():
         return jsonify({"error": "event not found"}), 404
 
     evt = db["events"][eid]
-    parts = evt.setdefault("participants", [])
-    if uid not in parts:
-        parts.append(uid)
+    # Only allow pre-registration for open (scheduled future) events
+    if evt.get("status") != "open":
+        return jsonify({"error": "สามารถลงชื่อได้เฉพาะ Event ที่ยังไม่เริ่มเท่านั้น"}), 400
+
+    pre = evt.setdefault("pre_registered", [])
+    if uid not in pre:
+        pre.append(uid)
     save_db(db)
     return jsonify({"success": True})
 
@@ -1583,9 +1674,12 @@ def event_leave():
         return jsonify({"error": "event not found"}), 404
 
     evt = db["events"][eid]
-    parts = evt.get("participants", [])
-    if uid in parts:
-        parts.remove(uid)
+    if evt.get("status") != "open":
+        return jsonify({"error": "ไม่สามารถยกเลิกได้ (event เริ่มแล้ว)"}), 400
+
+    pre = evt.get("pre_registered", [])
+    if uid in pre:
+        pre.remove(uid)
     save_db(db)
     return jsonify({"success": True})
 

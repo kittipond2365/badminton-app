@@ -230,9 +230,28 @@
   <!-- EVENTS TAB -->
   <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
     <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow">
-      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event</h3>
+      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event ล่วงหน้า</h3>
       <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน">
+      <input id="evt-location" class="input input-bordered input-sm w-full mb-2" placeholder="สถานที่ เช่น สนาม ABC">
       <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
+
+      <div class="grid grid-cols-2 gap-2 mb-2">
+        <select id="evt-points" class="select select-bordered select-sm w-full">
+          <option value="21" selected>แต้ม 21</option>
+          <option value="11">แต้ม 11</option>
+        </select>
+        <select id="evt-bo" class="select select-bordered select-sm w-full">
+          <option value="1" selected>BO1</option>
+          <option value="2">BO2</option>
+          <option value="3">BO3</option>
+        </select>
+      </div>
+
+      <label class="label cursor-pointer justify-start gap-2 mb-2">
+        <input type="checkbox" class="checkbox checkbox-sm checkbox-primary" id="evt-notify">
+        <span class="label-text text-xs">เปิดแจ้งเตือน</span>
+      </label>
+
       <button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button>
     </div>
     <div id="events-list" class="space-y-3"></div>
@@ -843,6 +862,22 @@
           el.innerText = `เริ่มใน ${left}s`;
         }
       });
+
+      // Event countdowns
+      document.querySelectorAll('.event-countdown').forEach(el => {
+        const target = parseFloat(el.dataset.evtTarget || "0");
+        if(!target) return;
+        const left = Math.max(0, Math.floor(target - now));
+        const txt = el.querySelector('.countdown-text');
+        if(!txt) return;
+        if(left <= 0){
+          txt.innerText = "ถึงเวลาแล้ว!";
+          txt.classList.remove('text-blue-700');
+          txt.classList.add('text-green-600');
+        } else {
+          txt.innerText = formatCountdown(left);
+        }
+      });
     }
 
     function renderQueueAndRest(){
@@ -1196,47 +1231,101 @@
     function renderEvents(){
       const box = document.getElementById('events-list');
       const events = dashboard.events || [];
-      box.innerHTML = events.length ? events.map(e=>{
+      if(!events.length){
+        box.innerHTML = `<div class="text-center text-gray-400 py-8">ไม่มี events</div>`;
+        return;
+      }
+
+      box.innerHTML = events.map(e=>{
         const canDel = isStaff();
-        const pCount = (e.participants_public||[]).length;
         const status = e.status || "open";
         const statusColor = status === "active" ? "badge-success" : (status === "ended" ? "badge-ghost" : "badge-info");
+        const borderColor = status === "active" ? "border-green-400 border-2" : (status === "open" ? "border-blue-300 border" : "border");
+        const bgColor = status === "active" ? "bg-green-50" : "bg-white";
 
-        // Check if current user already joined
-        const myParts = (e.participants||[]);
-        const iJoined = myParts.includes(user.id);
+        const scoring = e.scoring || {points:21, bo:1};
+        const loc = e.location || "";
 
-        // Join/Leave button (only for open or active events)
-        const canJoin = (status === "open" || status === "active");
-        const joinBtn = canJoin
+        // Pre-registered (only for open events)
+        const preReg = e.pre_registered_public || [];
+        // Participants (played in active/ended events)
+        const parts = e.participants_public || [];
+
+        // Join/Leave button: only for open (future scheduled) events
+        const myPreReg = (e.pre_registered || []);
+        const iJoined = myPreReg.includes(user.id);
+        const joinBtn = status === "open"
           ? (iJoined
             ? `<button class="btn btn-xs btn-outline btn-error" onclick="leaveEvent('${e.id}')"><i class="fa-solid fa-right-from-bracket mr-1"></i>ยกเลิก</button>`
-            : `<button class="btn btn-xs btn-primary" onclick="joinEvent('${e.id}')"><i class="fa-solid fa-right-to-bracket mr-1"></i>เข้าร่วม</button>`)
+            : `<button class="btn btn-xs btn-primary" onclick="joinEvent('${e.id}')"><i class="fa-solid fa-right-to-bracket mr-1"></i>Join</button>`)
           : '';
 
-        return `
-          <div class="bg-white border rounded p-3 shadow-sm">
-            <div class="flex justify-between items-start">
-              <div>
-                <div class="font-black text-gray-800">${e.name}</div>
-                <div class="text-xs text-gray-500">${formatDate(e.datetime)} · <span class="badge badge-xs ${statusColor}">${status.toUpperCase()}</span> · คน: ${pCount}</div>
+        // Countdown for open future events
+        const countdownSec = e.countdown_sec || 0;
+        const countdownHtml = (status === "open" && countdownSec > 0)
+          ? `<div class="event-countdown text-center mt-2 py-2 bg-blue-50 rounded-lg" data-evt-target="${parseFloat(e.datetime||0)}">
+               <span class="text-xs text-blue-500 font-bold">⏳ เริ่มใน </span>
+               <span class="countdown-text text-sm font-black text-blue-700">${formatCountdown(countdownSec)}</span>
+             </div>`
+          : '';
+
+        // Settings badge
+        const settingsBadge = `<span class="text-xs text-gray-400">${scoring.points}แต้ม · BO${scoring.bo}</span>`;
+
+        // Location
+        const locHtml = loc ? `<div class="text-xs text-gray-500 mt-0.5">📍 ${loc}</div>` : '';
+
+        // Render people section
+        function renderPeople(list, label, bgCls){
+          if(!list.length) return '';
+          return `
+            <div class="mt-2">
+              <div class="text-xs font-bold text-gray-500 mb-1">${label} (${list.length})</div>
+              <div class="flex flex-wrap gap-1.5">
+                ${list.map(p=>`
+                  <div class="flex items-center gap-1 ${bgCls} border rounded-full px-2 py-0.5 text-xs cursor-pointer" onclick="openProfile('${p.id}')">
+                    <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
+                    <span class="font-bold">${p.nickname}</span>
+                  </div>
+                `).join('')}
               </div>
-              <div class="flex items-center gap-1">
+            </div>`;
+        }
+
+        const preRegHtml = renderPeople(preReg, "🙋 ลงชื่อล่วงหน้า", "bg-blue-50");
+        const partsHtml = renderPeople(parts, "🏸 ผู้เล่น", "bg-slate-50");
+
+        return `
+          <div class="${bgColor} ${borderColor} rounded-xl p-3 shadow-sm">
+            <div class="flex justify-between items-start">
+              <div class="flex-1 min-w-0">
+                <div class="font-black text-gray-800 truncate">${status === "active" ? "🟢 " : ""}${e.name}</div>
+                <div class="text-xs text-gray-500">${formatDate(e.datetime)} · <span class="badge badge-xs ${statusColor}">${status.toUpperCase()}</span> · ${settingsBadge}</div>
+                ${locHtml}
+              </div>
+              <div class="flex items-center gap-1 shrink-0 ml-2">
                 ${joinBtn}
                 ${canDel ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')"><i class="fa-solid fa-trash"></i></button>` : ``}
               </div>
             </div>
-            <div class="mt-2 flex flex-wrap gap-2">
-              ${(e.participants_public||[]).map(p=>`
-                <div class="flex items-center gap-1 bg-slate-50 border rounded-full px-2 py-1 text-xs cursor-pointer" onclick="openProfile('${p.id}')">
-                  <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
-                  <span class="font-bold">${p.nickname}</span>
-                </div>
-              `).join('')}
-            </div>
+            ${countdownHtml}
+            ${preRegHtml}
+            ${partsHtml}
           </div>
         `;
-      }).join('') : `<div class="text-center text-gray-400">ไม่มี events</div>`;
+      }).join('');
+    }
+
+    function formatCountdown(sec){
+      if(sec <= 0) return "เริ่มแล้ว!";
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      let parts = [];
+      if(d > 0) parts.push(`${d} วัน`);
+      if(h > 0) parts.push(`${h} ชม.`);
+      parts.push(`${m} นาที`);
+      return parts.join(' ');
     }
 
     // BUG FIX: complete admin user list with promote/demote + MMR edit
@@ -1344,15 +1433,22 @@
     async function submitNewEvent(){
       const n = document.getElementById('evt-name').value;
       const t = document.getElementById('evt-time').value;
+      const loc = document.getElementById('evt-location').value;
+      const pts = parseInt(document.getElementById('evt-points').value || "21");
+      const bo = parseInt(document.getElementById('evt-bo').value || "1");
+      const notify = document.getElementById('evt-notify').checked;
+
       if(!n || !t) return alert("กรอกชื่อและเวลา");
       const ts = new Date(t).getTime()/1000;
       const r = await (await fetch('/api/event/create',{
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({userId:user.id, name:n, datetime:ts})
+        body: JSON.stringify({userId:user.id, name:n, datetime:ts, location:loc, points:pts, bo:bo, notify:notify})
       })).json();
-      if(r.error) alert(r.error);
+      if(r.error) return alert(r.error);
+      toast("สร้าง Event สำเร็จ!");
       document.getElementById('evt-name').value = "";
       document.getElementById('evt-time').value = "";
+      document.getElementById('evt-location').value = "";
       await refresh();
     }
 
