@@ -23,6 +23,9 @@
     .mini-sub { font-size: 11px; font-weight: 600; color: rgb(107,114,128); }
 
     .card-soft { border: 1px solid rgb(224,231,255); }
+    .delta-plus { color: rgb(22,163,74); font-weight: 800; }
+    .delta-minus { color: rgb(220,38,38); font-weight: 800; }
+    .delta-zero { color: rgb(107,114,128); font-weight: 800; }
   </style>
 </head>
 
@@ -35,7 +38,7 @@
     </div>
 
     <div class="flex-none gap-2">
-      <button id="btn-admin" onclick="document.getElementById('modal_admin').showModal()"
+      <button id="btn-admin" onclick="safeShowModal('modal_admin')"
               class="btn btn-circle btn-ghost text-red-600 hidden">
         <i class="fa-solid fa-gear text-xl"></i>
       </button>
@@ -160,6 +163,17 @@
         <tbody id="queue-list"></tbody>
       </table>
     </div>
+
+    <!-- RESTING LIST (แก้ข้อ 7) -->
+    <div class="bg-white rounded-xl shadow-sm overflow-hidden card-soft mt-3">
+      <div class="bg-gray-50 px-4 py-2 border-b font-bold text-gray-600 flex justify-between">
+        <span>คนพัก</span>
+        <span id="r-count" class="badge badge-ghost">0</span>
+      </div>
+      <table class="table table-sm">
+        <tbody id="resting-list"></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- STATS TAB -->
@@ -189,7 +203,7 @@
     <div class="bg-white rounded-xl shadow-sm p-3 border border-gray-200">
       <div class="text-xs text-gray-400 mb-1">หมายเหตุ</div>
       <div class="text-sm text-gray-600">
-        ระบบนับสถิติเป็น “จำนวนเซต” เช่น BO3 ชนะ 2 แพ้ 1 => ชนะ 2 เซต แพ้ 1 เซต
+        สถิตินับเป็น “จำนวนเซต” (ตามที่คุยกัน) และแต้มรวมใช้เป็น tie-breaker
       </div>
     </div>
   </div>
@@ -231,10 +245,10 @@
   <!-- EVENTS TAB -->
   <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
     <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow card-soft">
-      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event (แยกจาก session)</h3>
-      <div class="text-xs text-gray-500 mb-2">* ใช้งานหลักให้ใช้ “เริ่มก๊วน” ในเฟืองแดง</div>
-      <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อก๊วน">
-      <button onclick="noop()" class="btn btn-primary btn-sm w-full">ยังไม่ใช้ (กันพัง)</button>
+      <h3 class="font-bold text-sm mb-2">➕ สร้าง Event (Custom)</h3>
+      <div class="text-xs text-gray-500 mb-2">ใช้สำหรับทำบันทึก/แยกบิลเพิ่ม (ไม่กระทบ session)</div>
+      <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อ Event">
+      <button onclick="createEvent()" class="btn btn-primary btn-sm w-full">สร้าง</button>
     </div>
 
     <div id="events-list" class="space-y-3"></div>
@@ -261,7 +275,7 @@
       <div id="fin-sets" class="space-y-2"></div>
 
       <div class="modal-action">
-        <form method="dialog"><button class="btn btn-ghost">ปิด</button></form>
+        <button class="btn btn-ghost" onclick="safeCloseModal('modal_finish')">ปิด</button>
         <button class="btn btn-primary" onclick="submitResult()">บันทึกผล</button>
       </div>
 
@@ -288,7 +302,7 @@
 
       <div class="grid grid-cols-3 gap-2 mt-4">
         <div class="bg-white border rounded p-2 text-center">
-          <div class="mini-title">WR</div>
+          <div class="mini-title">Set WR</div>
           <div class="font-black" id="pf-wr">0%</div>
         </div>
         <div class="bg-white border rounded p-2 text-center">
@@ -301,11 +315,26 @@
         </div>
       </div>
 
-      <div class="divider my-3 text-xs text-gray-400">10 แมตช์ล่าสุด</div>
+      <div class="grid grid-cols-3 gap-2 mt-2">
+        <div class="bg-white border rounded p-2 text-center">
+          <div class="mini-title">Match WR</div>
+          <div class="font-black" id="pf-mwr">0%</div>
+        </div>
+        <div class="bg-white border rounded p-2 text-center">
+          <div class="mini-title">Matches</div>
+          <div class="font-black" id="pf-mrec">0-0</div>
+        </div>
+        <div class="bg-white border rounded p-2 text-center">
+          <div class="mini-title">MMR</div>
+          <div class="font-black" id="pf-mmr">—</div>
+        </div>
+      </div>
+
+      <div class="divider my-3 text-xs text-gray-400">10 แมตช์ล่าสุด (+/- MMR)</div>
       <div id="pf-last10" class="space-y-2"></div>
 
       <div class="modal-action">
-        <form method="dialog"><button class="btn">ปิด</button></form>
+        <button class="btn" onclick="safeCloseModal('modal_profile')">ปิด</button>
       </div>
     </div>
   </dialog>
@@ -377,7 +406,7 @@
       </div>
 
       <div class="modal-action">
-        <form method="dialog"><button class="btn">ปิด</button></form>
+        <button class="btn" onclick="safeCloseModal('modal_admin')">ปิด</button>
       </div>
     </div>
   </dialog>
@@ -404,9 +433,9 @@
       </div>
 
       <button onclick="submitManualMatch()" class="btn btn-primary w-full">เรียกลงสนาม</button>
-      <form method="dialog" class="mt-2 text-center">
-        <button class="btn btn-ghost btn-sm">ปิด</button>
-      </form>
+      <div class="mt-2 text-center">
+        <button class="btn btn-ghost btn-sm" onclick="safeCloseModal('modal_manual_match')">ปิด</button>
+      </div>
     </div>
   </dialog>
 
@@ -417,7 +446,7 @@
 
       <div class="grid grid-cols-1 gap-3 mb-4 bg-gray-50 p-3 rounded-lg border">
         <select id="bill-event-select" class="select select-bordered select-sm w-full" onchange="loadBillPlayers()">
-          <option disabled selected>-- เลือก Session --</option>
+          <option disabled selected>-- เลือก Event/Session --</option>
         </select>
 
         <div class="grid grid-cols-2 gap-2">
@@ -451,7 +480,7 @@
       </div>
 
       <div class="modal-action">
-        <form method="dialog"><button class="btn btn-ghost">ปิด</button></form>
+        <button class="btn btn-ghost" onclick="safeCloseModal('modal_billing')">ปิด</button>
         <button class="btn btn-success text-white" onclick="copyBillSummary()">Copy</button>
       </div>
     </div>
@@ -463,20 +492,14 @@
       <h3 class="font-bold text-lg">📣 ถึงคิวลงสนาม!</h3>
       <div class="text-sm text-gray-600 mt-1" id="notify-text">...</div>
       <div class="modal-action">
-        <form method="dialog"><button class="btn btn-primary">รับทราบ</button></form>
+        <button class="btn btn-primary" onclick="safeCloseModal('modal_notify')">รับทราบ</button>
       </div>
     </div>
   </dialog>
 
   <script>
-    // -----------------------------
-    // LIFF
-    // -----------------------------
     const LIFF_ID = "2009064792-6RT6YKWO";
 
-    // -----------------------------
-    // STATE
-    // -----------------------------
     let user = null;
     let dashboard = null;
 
@@ -487,8 +510,40 @@
     let lastNotifiedMatchId = null;
 
     // -----------------------------
-    // helpers
+    // Modal helpers (แก้ข้อ 2: iOS/LIFF บางทีไม่ support showModal ดี)
     // -----------------------------
+    function safeShowModal(id){
+      const dlg = document.getElementById(id);
+      if(!dlg) return;
+      try{
+        if(typeof dlg.showModal === "function"){
+          dlg.showModal();
+        }else{
+          dlg.setAttribute("open", "");
+          dlg.classList.add("modal-open");
+        }
+      }catch(e){
+        // fallback
+        dlg.setAttribute("open", "");
+        dlg.classList.add("modal-open");
+      }
+    }
+    function safeCloseModal(id){
+      const dlg = document.getElementById(id);
+      if(!dlg) return;
+      try{
+        if(typeof dlg.close === "function"){
+          dlg.close();
+        }else{
+          dlg.removeAttribute("open");
+          dlg.classList.remove("modal-open");
+        }
+      }catch(e){
+        dlg.removeAttribute("open");
+        dlg.classList.remove("modal-open");
+      }
+    }
+
     function escapeHtml(str){
       return String(str ?? "")
         .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
@@ -504,6 +559,20 @@
       if(wr < 40) return "pill pill-wr-low";
       if(wr < 60) return "pill pill-wr-mid";
       return "pill pill-wr-high";
+    }
+
+    function deltaClass(v){
+      if(v == null) return "delta-zero";
+      if(v > 0) return "delta-plus";
+      if(v < 0) return "delta-minus";
+      return "delta-zero";
+    }
+
+    function formatDelta(v){
+      if(v == null) return "";
+      const n = parseInt(v, 10);
+      if(n > 0) return `+${n}`;
+      return `${n}`;
     }
 
     function beep(times=2){
@@ -587,7 +656,6 @@
       document.getElementById('me-name').innerText = user.nickname || "User";
       document.getElementById('me-title').innerText = user.rank_title || "";
 
-      // top right mmr: hide if unrank
       if(user.unrank){
         document.getElementById('my-mmr').innerText = `Unrank (${user.calib_games ?? 0}/10)`;
       }else{
@@ -599,14 +667,12 @@
       pill.className = wrPillClass(wr);
       pill.innerText = `${wr}%`;
 
-      // stats tab
       document.getElementById('st-wr').innerText = `${wr}%`;
       document.getElementById('st-win').innerText = user.stats?.set_wins ?? 0;
       document.getElementById('st-lose').innerText = user.stats?.set_losses ?? 0;
       document.getElementById('st-pf').innerText = user.stats?.points_for ?? 0;
       document.getElementById('st-pa').innerText = user.stats?.points_against ?? 0;
 
-      // staff buttons
       const isStaff = (user.role === "super" || user.role === "mod");
       if(isStaff){
         document.getElementById('btn-admin').classList.remove('hidden');
@@ -630,17 +696,13 @@
         const sys = dashboard.system || {};
         const sessActive = !!sys.is_session_active;
 
-        // session alert
         const sessAlert = document.getElementById('session-alert');
         if(!sessActive) sessAlert.classList.remove('hidden'); else sessAlert.classList.add('hidden');
 
-        // cooldown suggestion
         document.getElementById('cooldown-suggest').innerText = sys.suggested_cooldown_min ?? 0;
-
-        // update courts count in admin
         document.getElementById('court-count-display').innerText = sys.total_courts ?? 2;
 
-        // sync "me" from all_players (แก้บั๊ก MMR ไม่ sync ทุกจุด)
+        // sync me from all_players
         const me = (dashboard.all_players || []).find(x => x.id === user.id);
         if(me){
           user.status = me.status;
@@ -656,7 +718,6 @@
           user.rank_title = me.rank_title;
           user.mmr = me.mmr;
 
-          // top right mmr refresh
           if(user.unrank) document.getElementById('my-mmr').innerText = `Unrank (${user.calib_games ?? 0}/10)`;
           else document.getElementById('my-mmr').innerText = user.mmr ?? "—";
 
@@ -668,12 +729,11 @@
         renderPairUI();
         renderCourts();
         renderQueue();
+        renderResting();
         renderHistoryCards();
         renderLeaderboards();
         renderEvents();
         renderAdminLists();
-
-        // in-app notify when match called
         maybeNotifyCalledMatch(sys);
 
       }catch(e){
@@ -721,7 +781,6 @@
     function renderPairUI(){
       const all = dashboard.all_players || [];
 
-      // paired box
       const pairedBox = document.getElementById('pair-paired-box');
       const pairedName = document.getElementById('pair-paired-name');
 
@@ -733,7 +792,6 @@
         pairedBox.classList.add('hidden');
       }
 
-      // outgoing
       const outBox = document.getElementById('pair-outgoing-box');
       const outName = document.getElementById('pair-outgoing-name');
       if(user.pair_outgoing && !user.paired_with){
@@ -744,7 +802,6 @@
         outBox.classList.add('hidden');
       }
 
-      // request form only when: active & not paired
       const form = document.getElementById('pair-request-form');
       if(user.status === "active" && !user.paired_with){
         form.classList.remove('hidden');
@@ -752,12 +809,10 @@
         form.classList.add('hidden');
       }
 
-      // partner select options (active only, not self)
       const sel = document.getElementById('partner-select');
       const currentVal = sel.value;
       sel.innerHTML = '<option disabled selected>-- เลือกเพื่อน --</option>';
       all.filter(p => p.id !== user.id).forEach(p => {
-        // allow request to anyone (even if not active) ? คงแบบเดิมให้ขอเฉพาะคน active จะตรงการใช้งาน
         if(p.status === "active"){
           const opt = document.createElement('option');
           opt.value = p.id;
@@ -767,7 +822,6 @@
       });
       if(currentVal) sel.value = currentVal;
 
-      // incoming list
       const incWrap = document.getElementById('pair-incoming-list');
       const inc = user.pair_incoming || [];
       if(inc.length === 0){
@@ -814,10 +868,8 @@
       cc.innerHTML = "";
 
       const courts = dashboard.courts || {};
-      const sys = dashboard.system || {};
       const isStaff = (user.role === "super" || user.role === "mod");
 
-      // rebuild manual match court select
       const manCourt = document.getElementById('man-court');
       manCourt.innerHTML = "";
       Object.keys(courts).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(cid=>{
@@ -885,7 +937,7 @@
     }
 
     // -----------------------------
-    // Queue UI
+    // Queue + Resting UI (แก้ข้อ 7)
     // -----------------------------
     function renderQueue(){
       const q = dashboard.queue || [];
@@ -919,8 +971,34 @@
       }).join('');
     }
 
+    function renderResting(){
+      const r = dashboard.resting || [];
+      document.getElementById('r-count').innerText = dashboard.resting_count ?? r.length;
+
+      document.getElementById('resting-list').innerHTML = r.length ? r.map((p, i) => {
+        const title = getTitleFromPlayer(p);
+        return `
+          <tr class="border-b">
+            <td>
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-gray-400">${i+1}.</span>
+                <img src="${p.pictureUrl}" class="w-6 h-6 rounded-full"/>
+                <button class="text-left" onclick="openProfile('${p.id}')">
+                  <div class="text-sm font-bold text-gray-600">${escapeHtml(p.nickname)}</div>
+                  <div class="text-[11px] font-semibold text-gray-400">${escapeHtml(title)}</div>
+                </button>
+              </div>
+            </td>
+            <td class="text-right">
+              <span class="badge badge-warning badge-sm">${p.wait_min ?? 0} min</span>
+            </td>
+          </tr>
+        `;
+      }).join('') : `<tr><td class="text-center text-gray-400 py-4">ไม่มีคนพัก</td></tr>`;
+    }
+
     // -----------------------------
-    // History UI (A left vs B right)
+    // History UI (+/- MMR) แก้ข้อ 3
     // -----------------------------
     function setHistoryMode(mode){
       historyMode = mode;
@@ -948,7 +1026,7 @@
       }
 
       wrap.innerHTML = list.map(m => {
-        const winner = m.winner_team; // A/B
+        const winner = m.winner_team;
         const aIds = (m.team_a||[]).map(x=>x.id);
         const bIds = (m.team_b||[]).map(x=>x.id);
 
@@ -967,15 +1045,23 @@
         const duration = (m.duration_min != null) ? `${m.duration_min} min` : "";
         const scoreLine = m.score_summary ? `<div class="px-4 pb-3 text-xs text-gray-600">${escapeHtml(m.score_summary)}</div>` : "";
 
-        const teamBox = (team) => team.map(p => `
-          <div class="flex items-center gap-2">
-            <img src="${p.pictureUrl}" class="w-7 h-7 rounded-full"/>
-            <div class="min-w-0">
-              <div class="text-xs font-bold truncate max-w-[140px]">${escapeHtml(p.nickname)}</div>
-              <div class="text-[11px] font-semibold text-gray-400 truncate">${escapeHtml(p.rank_title)}</div>
+        const snap = (m.mmr_snapshot || {});
+
+        const teamBox = (team) => team.map(p => {
+          const d = snap[p.id]?.delta ?? null;
+          const dText = formatDelta(d);
+          const dCls = deltaClass(d);
+          return `
+            <div class="flex items-center gap-2">
+              <img src="${p.pictureUrl}" class="w-7 h-7 rounded-full"/>
+              <div class="min-w-0">
+                <div class="text-xs font-bold truncate max-w-[130px]">${escapeHtml(p.nickname)}</div>
+                <div class="text-[11px] font-semibold text-gray-400 truncate">${escapeHtml(p.rank_title)}</div>
+              </div>
+              <div class="ml-auto text-[11px] ${dCls} font-mono">${dText}</div>
             </div>
-          </div>
-        `).join('');
+          `;
+        }).join('');
 
         return `
           <div class="card bg-white shadow-sm border card-soft">
@@ -1066,22 +1152,40 @@
     }
 
     // -----------------------------
-    // Events render (for billing)
+    // Events render (latest first + delete) แก้ข้อ 4 + 5
     // -----------------------------
+    function formatDate(ts){
+      if(!ts) return "-";
+      const dt = new Date(ts * 1000);
+      return dt.toLocaleString('th-TH', { year:'2-digit', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+    }
+
     function renderEvents(){
       const wrap = document.getElementById('events-list');
-      const events = dashboard.events || [];
+      const events = (dashboard.events || []);
+      const isStaff = (user.role === "super" || user.role === "mod");
+
       wrap.innerHTML = events.map(e => {
-        const status = e.status === "active" ? `<span class="badge badge-success text-white">ACTIVE</span>` : `<span class="badge badge-ghost">CLOSED</span>`;
+        const status = e.status === "active"
+          ? `<span class="badge badge-success text-white">ACTIVE</span>`
+          : `<span class="badge badge-ghost">CLOSED</span>`;
         const rosterCount = (e.players || []).length;
+
+        const delBtn = isStaff
+          ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')">ลบ</button>`
+          : "";
+
         return `
           <div class="card bg-white shadow-sm border card-soft">
             <div class="p-3 flex justify-between items-start">
               <div>
                 <div class="font-bold text-gray-700">${escapeHtml(e.name || "Event")}</div>
-                <div class="text-xs text-gray-500">Players: ${rosterCount}</div>
+                <div class="text-xs text-gray-500">Created: ${formatDate(e.created_at)} | Players: ${rosterCount}</div>
               </div>
-              ${status}
+              <div class="flex items-center gap-2">
+                ${status}
+                ${delBtn}
+              </div>
             </div>
           </div>
         `;
@@ -1089,7 +1193,7 @@
     }
 
     // -----------------------------
-    // Admin render
+    // Admin render (mod toggle stable) แก้ข้อ 6
     // -----------------------------
     function renderAdminLists(){
       if(!dashboard) return;
@@ -1097,9 +1201,9 @@
       if(!isStaff) return;
 
       const all = dashboard.all_players || [];
-      // automatch list
       const sys = dashboard.system || {};
       const am = sys.automatch || {};
+
       const amWrap = document.getElementById('automatch-list');
       amWrap.innerHTML = Object.keys(dashboard.courts||{}).sort((a,b)=>parseInt(a)-parseInt(b)).map(cid=>{
         const checked = !!am[cid];
@@ -1112,7 +1216,6 @@
         `;
       }).join('');
 
-      // mmr target
       const sel = document.getElementById('mmr-target');
       const cur = sel.value;
       sel.innerHTML = "";
@@ -1124,7 +1227,6 @@
       });
       if(cur) sel.value = cur;
 
-      // super admin manage mod
       if(user.role === "super"){
         document.getElementById('admin-user-list').innerHTML =
           all.map(p => `
@@ -1132,18 +1234,16 @@
               <td>${escapeHtml(p.nickname)}</td>
               <td class="text-right">
                 <input type="checkbox" class="toggle toggle-xs toggle-success"
-                  ${p.is_mod?'checked':''}
+                  ${p.is_mod ? 'checked' : ''}
                   onchange="toggleMod('${p.id}', this.checked)">
               </td>
             </tr>
           `).join('');
       }
-
-      // update court count display already
     }
 
     // -----------------------------
-    // MATCH FINISH MODAL
+    // Finish modal
     // -----------------------------
     function openFinishModal(cid){
       selectedCid = cid;
@@ -1170,7 +1270,6 @@
 
       document.getElementById('fin-rule-text').innerText = `กติกา: ${pts} แต้ม | BO${bo} | ดิวส์ถึง 30`;
 
-      // render set inputs
       const wrap = document.getElementById('fin-sets');
       wrap.innerHTML = "";
       for(let i=1;i<=bo;i++){
@@ -1185,7 +1284,7 @@
         `;
       }
 
-      document.getElementById('modal_finish').showModal();
+      safeShowModal('modal_finish');
     }
 
     async function submitResult(){
@@ -1207,48 +1306,55 @@
       const r = await res.json();
       if(r.error) return alert(r.error);
 
-      document.getElementById('modal_finish').close();
+      safeCloseModal('modal_finish');
       await refresh();
     }
 
     // -----------------------------
-    // Profile modal
+    // Profile modal (แก้ข้อ 2 + 3)
     // -----------------------------
     async function openProfile(uid){
       const res = await fetch(`/api/player/profile/${uid}`);
       const p = await res.json();
-      if(p.error) return;
+      if(p.error) return alert(p.error);
 
       document.getElementById('pf-img').src = p.pictureUrl || "https://ui-avatars.com/api/?name=User";
       document.getElementById('pf-name').innerText = p.nickname || "User";
       document.getElementById('pf-title').innerText = p.rank_title || "";
 
-      document.getElementById('pf-wr').innerText = `${p.stats?.win_rate ?? 0}%`;
+      document.getElementById('pf-wr').innerText = `${p.stats?.set_win_rate ?? 0}%`;
       document.getElementById('pf-sets').innerText = `${p.stats?.set_wins ?? 0}-${p.stats?.set_losses ?? 0}`;
       document.getElementById('pf-pts').innerText = `${p.stats?.points_for ?? 0}-${p.stats?.points_against ?? 0}`;
 
-      // last 10
+      document.getElementById('pf-mwr').innerText = `${p.stats?.match_win_rate ?? 0}%`;
+      document.getElementById('pf-mrec').innerText = `${p.stats?.match_wins ?? 0}-${p.stats?.match_losses ?? 0}`;
+      document.getElementById('pf-mmr').innerText = p.unrank ? `Unrank (${p.calib_games ?? 0}/10)` : (p.mmr ?? "—");
+
       const wrap = document.getElementById('pf-last10');
       const last = p.last_10 || [];
       if(last.length === 0){
         wrap.innerHTML = `<div class="text-center text-gray-400 text-sm py-4">ยังไม่มีประวัติ</div>`;
       }else{
         wrap.innerHTML = last.map(m=>{
-          const youInA = (m.team_a||[]).map(x=>x.id).includes(uid);
-          const win = (youInA && m.winner_team==="A") || (!youInA && m.winner_team==="B");
+          const d = m.mmr_delta;
+          const dText = formatDelta(d);
+          const dCls = deltaClass(d);
           return `
             <div class="p-2 rounded border bg-gray-50">
               <div class="flex justify-between items-center">
-                <div class="text-xs text-gray-600">${escapeHtml(m.date||'')}</div>
-                <span class="badge ${win?'badge-success text-white':'badge-error text-white'}">${win?'W':'L'}</span>
+                <div class="text-xs text-gray-600">${escapeHtml(m.date||'')} • Court ${escapeHtml(m.court_id||'')}</div>
+                <div class="flex items-center gap-2">
+                  <span class="badge ${m.result==='W'?'badge-success text-white':'badge-error text-white'}">${m.result}</span>
+                  <span class="text-xs font-mono ${dCls}">${dText}</span>
+                </div>
               </div>
-              <div class="text-xs text-gray-500">${escapeHtml(m.score_summary||'')}</div>
+              <div class="text-xs text-gray-500">${escapeHtml(m.score_summary||'')} • ${m.duration_min ?? '-'} min</div>
             </div>
           `;
         }).join('');
       }
 
-      document.getElementById('modal_profile').showModal();
+      safeShowModal('modal_profile');
     }
 
     // -----------------------------
@@ -1257,11 +1363,8 @@
     function maybeNotifyCalledMatch(sys){
       if(!sys.notify_enabled) return;
       if(!user.current_match_id) return;
-
-      // avoid spam
       if(lastNotifiedMatchId === user.current_match_id) return;
 
-      // find court that has this match
       const courts = dashboard.courts || {};
       let found = null;
       for(const [cid, m] of Object.entries(courts)){
@@ -1278,7 +1381,7 @@
       document.getElementById('notify-text').innerText = `Court ${found.court_id} | A: ${namesA}  VS  B: ${namesB} (ลงภายใน 1 นาที)`;
 
       beep(3); buzz();
-      document.getElementById('modal_notify').showModal();
+      safeShowModal('modal_notify');
     }
 
     // -----------------------------
@@ -1382,7 +1485,6 @@
       await refresh();
     }
 
-    // staff: request matchmaking
     async function requestMatchmake(){
       const res = await fetch('/api/matchmake', {
         method:'POST',
@@ -1471,11 +1573,14 @@
     }
 
     async function toggleMod(tid, val){
-      await fetch('/api/admin/manage_mod', {
+      const res = await fetch('/api/admin/manage_mod', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ requesterId: user.id, targetUserId: tid, action: val ? "promote" : "demote" })
       });
+      const r = await res.json();
+      if(r.error) alert(r.error);
+      await refresh(); // ✅ แก้ข้อ 6: refresh เพื่อไม่ให้เด้งกลับ
     }
 
     async function setMMR(){
@@ -1494,10 +1599,39 @@
     }
 
     // -----------------------------
+    // Events actions (แก้ข้อ 5)
+    // -----------------------------
+    async function createEvent(){
+      const name = document.getElementById('evt-name').value.trim();
+      if(!name) return alert("กรอกชื่อ event ก่อนครับ");
+      const res = await fetch('/api/admin/create_event', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ userId: user.id, name })
+      });
+      const r = await res.json();
+      if(r.error) alert(r.error);
+      document.getElementById('evt-name').value = "";
+      await refresh();
+      switchTab('events');
+    }
+
+    async function deleteEvent(eid){
+      if(!confirm("ลบ event นี้?")) return;
+      const res = await fetch('/api/admin/delete_event', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ userId: user.id, eventId: eid })
+      });
+      const r = await res.json();
+      if(r.error) alert(r.error);
+      await refresh();
+    }
+
+    // -----------------------------
     // Manual match
     // -----------------------------
     function openManualMatch(){
-      // fill selects
       const active = (dashboard.all_players||[]).filter(p=>p.status==="active" && !p.resting && !p.current_match_id);
       document.querySelectorAll('.player-select').forEach(sel=>{
         sel.innerHTML = '<option value="">-- เลือก --</option>';
@@ -1509,7 +1643,7 @@
         });
       });
 
-      document.getElementById('modal_manual_match').showModal();
+      safeShowModal('modal_manual_match');
     }
 
     async function submitManualMatch(){
@@ -1529,31 +1663,25 @@
       });
       const r = await res.json();
       if(r.error) alert(r.error);
-      document.getElementById('modal_manual_match').close();
+      safeCloseModal('modal_manual_match');
       await refresh();
     }
 
     // -----------------------------
     // Billing
     // -----------------------------
-    function formatDate(ts){
-      if(!ts) return "-";
-      const dt = new Date(ts * 1000);
-      return dt.toLocaleDateString('th-TH', { day:'numeric', month:'short', year:'2-digit' });
-    }
-
     async function openBillingModal(){
       await refresh();
       const events = dashboard.events || [];
       const select = document.getElementById('bill-event-select');
-      select.innerHTML = '<option disabled selected>-- เลือก Session --</option>';
+      select.innerHTML = '<option disabled selected>-- เลือก Event/Session --</option>';
       events.forEach(e=>{
         const opt = document.createElement('option');
         opt.value = e.id;
         opt.innerText = `${e.name} (${formatDate(e.created_at)})`;
         select.appendChild(opt);
       });
-      document.getElementById('modal_billing').showModal();
+      safeShowModal('modal_billing');
     }
 
     function loadBillPlayers(){
@@ -1649,8 +1777,6 @@
 
       navigator.clipboard.writeText(txt).then(()=> alert("คัดลอกสรุปยอดแล้ว!"));
     }
-
-    function noop(){ alert("ส่วนนี้ยังไม่เปิดเพื่อกันระบบพัง (ใช้เริ่มก๊วนในเฟืองแดงแทน)"); }
 
     // start
     main();
