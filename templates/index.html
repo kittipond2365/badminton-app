@@ -230,6 +230,29 @@
         <button onclick="toggleSession('end')" class="btn btn-error text-white w-full">🏁 จบก๊วน</button>
       </div>
 
+      <!-- Mod tools (mmr editor) -->
+      <div id="mod-tools" class="mb-6 hidden p-4 bg-white rounded-lg border">
+        <h4 class="font-bold text-sm mb-3 text-gray-700"><i class="fa-solid fa-pen-to-square"></i> แก้ไข MMR ผู้เล่น</h4>
+
+        <div class="grid grid-cols-1 gap-2">
+          <select id="mmr-player-select" class="select select-bordered select-sm w-full" onchange="syncMmrEditorFromSelect()">
+            <option disabled selected>-- เลือกผู้เล่น --</option>
+          </select>
+
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span>สถานะ/Rank: <b id="mmr-player-rank">-</b></span>
+            <span>MMR เดิม: <b id="mmr-player-current">-</b></span>
+          </div>
+
+          <input id="mmr-new-value" type="number" class="input input-bordered input-sm w-full" placeholder="ใส่เลข MMR ใหม่ (เช่น 1200)">
+          <button onclick="adminSetMmr()" class="btn btn-sm btn-primary w-full">อัปเดต MMR</button>
+
+          <div class="text-[11px] text-gray-400 mt-1">
+            * ผู้เล่นยัง UNRANKED จนกว่าจะครบ 10 เกม (แก้ MMR ได้ แต่การซ่อน MMR ยังทำงานอยู่)
+          </div>
+        </div>
+      </div>
+
       <div id="super-admin-section" class="mb-4 hidden">
         <h4 class="font-bold text-sm mb-2">Moderators</h4>
         <div class="h-48 overflow-y-auto border rounded p-2 bg-white">
@@ -322,6 +345,24 @@
       setTimeout(() => div.remove(), ms);
     }
 
+    function isUnrankedPlayer(p) {
+      const cp = (p && typeof p.calib_played !== 'undefined') ? parseInt(p.calib_played || 0) : null;
+      if (cp !== null && !isNaN(cp)) return cp < 10;
+      const rt = (p && p.rank_title) ? String(p.rank_title) : "";
+      return rt.startsWith("UNRANKED");
+    }
+
+    function mmrTextForUI(p) {
+      // hide mmr everywhere -> show UNRANKED(n/10) for calibrate
+      if (!p) return "...";
+      if (p.mmr_display) return p.mmr_display;
+      if (isUnrankedPlayer(p)) {
+        const cp = parseInt(p.calib_played || 0);
+        return `UNRANKED (${isNaN(cp)?0:cp}/10)`;
+      }
+      return String(p.mmr ?? "...");
+    }
+
     function switchTab(t) {
       document.querySelectorAll('.tab').forEach(e => e.classList.remove('tab-active'));
       ['live','stats','history','rank','events'].forEach(x => {
@@ -375,10 +416,9 @@
       if (!user) return;
 
       document.getElementById('my-img').src = user.pictureUrl || "https://ui-avatars.com/api/?name=User";
-      document.getElementById('my-mmr').innerText = user.mmr ?? "...";
+      document.getElementById('my-mmr').innerText = mmrTextForUI(user); // <--- hide mmr if unranked
       document.getElementById('my-rank-text').innerText = user.rank_title ?? "...";
 
-      // stats tab
       if (user.stats) {
         document.getElementById('st-wr').innerText = (user.stats.win_rate ?? 0) + "%";
         document.getElementById('st-total').innerText = user.stats.total ?? 0;
@@ -387,14 +427,18 @@
         document.getElementById('st-nemesis').innerText = user.stats.nemesis ?? "-";
       }
 
-      // my history tab
+      // history: hide mmr changes if user is currently unranked
       const hList = document.getElementById('history-list');
       if (hList && user.my_history) {
+        const hideDelta = isUnrankedPlayer(user);
         hList.innerHTML = user.my_history.length ? user.my_history.map(m => {
           const myTeam = (m.team_a_ids || []).includes(user.id) ? 'A' : 'B';
           const isWin = m.winner_team === myTeam;
+
           let change = isWin ? "+0" : "-0";
-          if (m.mmr_snapshot && m.mmr_snapshot[user.id]) change = m.mmr_snapshot[user.id].change;
+          if (!hideDelta && m.mmr_snapshot && m.mmr_snapshot[user.id]) change = m.mmr_snapshot[user.id].change;
+          if (hideDelta) change = "UNRANKED";
+
           const timePart = (m.date || "").split(' ')[1] || "";
           return `<tr>
             <td>${isWin ? '<span class="badge badge-success text-white">W</span>' : '<span class="badge badge-error text-white">L</span>'}</td>
@@ -412,6 +456,7 @@
         document.getElementById('mod-court-control').classList.remove('hidden');
         document.getElementById('staff-extra').classList.remove('hidden');
         document.querySelectorAll('.staff-only').forEach(e => e.classList.remove('hidden'));
+        document.getElementById('mod-tools').classList.remove('hidden'); // <--- show mmr editor
       }
       if (user.role === 'super') {
         document.getElementById('super-admin-section').classList.remove('hidden');
@@ -501,6 +546,75 @@
       }
     }
 
+    function renderMmrEditorOptions() {
+      const isStaff = (user.role === 'super' || user.role === 'mod');
+      if (!isStaff) return;
+
+      const sel = document.getElementById("mmr-player-select");
+      if (!sel) return;
+
+      const cur = sel.value;
+      sel.innerHTML = `<option disabled selected>-- เลือกผู้เล่น --</option>`;
+
+      const sorted = [...globalAllPlayers].sort((a,b)=> (a.nickname||"").localeCompare(b.nickname||""));
+      sorted.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.innerText = `${p.nickname} • ${p.rank_title}`;
+        sel.appendChild(opt);
+      });
+
+      if (cur) sel.value = cur;
+      syncMmrEditorFromSelect();
+    }
+
+    function syncMmrEditorFromSelect() {
+      const sel = document.getElementById("mmr-player-select");
+      const rankEl = document.getElementById("mmr-player-rank");
+      const curEl = document.getElementById("mmr-player-current");
+      const input = document.getElementById("mmr-new-value");
+
+      if (!sel || !rankEl || !curEl || !input) return;
+
+      const pid = sel.value;
+      const p = globalAllPlayers.find(x => x.id === pid);
+      if (!p) {
+        rankEl.innerText = "-";
+        curEl.innerText = "-";
+        input.value = "";
+        return;
+      }
+
+      rankEl.innerText = p.rank_title || "-";
+      curEl.innerText = String(p.mmr ?? "-"); // Mod เห็นเลขจริง
+      if (!input.value) input.value = String(p.mmr ?? "");
+    }
+
+    async function adminSetMmr() {
+      const sel = document.getElementById("mmr-player-select");
+      const input = document.getElementById("mmr-new-value");
+      if (!sel || !input) return;
+
+      const targetId = sel.value;
+      const val = parseInt(input.value);
+      if (!targetId) return showToast("เลือกผู้เล่นก่อน", "error");
+      if (isNaN(val) || val < 0) return showToast("ใส่เลข MMR ที่ถูกต้อง", "error");
+
+      const res = await fetch('/api/admin/set_mmr', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, targetUserId:targetId, newMmr: val})
+      });
+      const r = await res.json();
+      if (r.error) return showToast(r.error, "error");
+
+      showToast("อัปเดต MMR แล้ว ✅", "success");
+      await refresh();
+
+      // refresh user ui fields (mmr display / rank)
+      await apiLogin(user.id, user.nickname, user.pictureUrl);
+    }
+
     async function refresh() {
       if (!user) return;
 
@@ -511,19 +625,21 @@
       globalEvents = d.events || [];
       globalAllPlayers = d.all_players || [];
 
-      // update me from dashboard
       const me = globalAllPlayers.find(p => p.id === user.id);
       if (me) {
         user.status = me.status;
         user.partner_req = me.partner_req;
         user.mmr = me.mmr;
+        user.mmr_display = me.mmr_display;
         user.rank_title = me.rank_title;
-        document.getElementById('my-mmr').innerText = user.mmr;
+
+        document.getElementById('my-mmr').innerText = mmrTextForUI(me); // <--- always hide if unranked
         document.getElementById('my-rank-text').innerText = user.rank_title || "...";
       }
 
       renderAutoMatchToggles();
       renderManualCourtOptions();
+      renderMmrEditorOptions();
 
       const isSessionActive = !!(globalSystem && globalSystem.is_session_active);
       const sessAlert = document.getElementById('session-alert');
@@ -616,7 +732,7 @@
         </tr>`;
       }).join('');
 
-      // leaderboard
+      // leaderboard (hide mmr for unranked)
       document.getElementById('lb-list').innerHTML = (d.leaderboard || []).map((p, i) => `
         <tr>
           <td class="font-bold text-gray-500">${i + 1}</td>
@@ -630,7 +746,7 @@
             </div>
           </td>
           <td class="text-right">
-            <div class="font-mono font-bold text-indigo-600">${p.mmr}</div>
+            <div class="font-mono font-bold text-indigo-600">${mmrTextForUI(p)}</div>
           </td>
         </tr>
       `).join('');
