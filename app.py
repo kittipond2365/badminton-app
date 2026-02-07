@@ -214,7 +214,6 @@ def progression_bar(p):
     mmr = int(p.get("mmr", 1000))
     lo = (mmr // 100) * 100
     hi = lo + 99
-    mid = lo + 50
     pct = int(round(((mmr - lo) / 99) * 100)) if hi > lo else 0
     # promotion / demotion indicator
     to_up = max(0, (hi + 1) - mmr)  # points to next bracket
@@ -225,7 +224,7 @@ def progression_bar(p):
         "pct": max(0, min(100, pct)),
         "to_up": to_up,
         "to_down": to_down,
-        "mid": mid
+        "mid": lo + 50
     }
 
 def effective_mmr_for_matchmaking(p):
@@ -282,7 +281,6 @@ def _eligible_players(db):
             continue
         if float(p.get("cooldown_until", 0)) > now:
             continue
-        # if paired, both must be queue eligible (we enforce later)
         players.append(p)
     # sort by queue time (oldest first)
     players.sort(key=lambda x: float(x.get("queue_join_ts", now)))
@@ -353,8 +351,6 @@ def _team_cost(db, teamA, teamB):
     dispA = max(mmrA) - min(mmrA)
     dispB = max(mmrB) - min(mmrB)
 
-    # discourage "2000+200 vs 1100+1100" strongly:
-    # disparity is what makes it not fun even if total equal
     within = dispA + dispB
 
     pen = 0
@@ -365,7 +361,6 @@ def _team_cost(db, teamA, teamB):
 
 def _best_split_for_four(db, four_ids):
     """Return best (teamA_ids, teamB_ids, cost) respecting paired units."""
-    # possible unique splits for 4 players:
     a = four_ids
     splits = [
         ([a[0], a[1]], [a[2], a[3]]),
@@ -373,7 +368,6 @@ def _best_split_for_four(db, four_ids):
         ([a[0], a[3]], [a[1], a[2]]),
     ]
 
-    # enforce paired_with: if any paired players appear, they must be on same team
     pairs = set()
     for uid in four_ids:
         p = db["players"].get(uid)
@@ -404,7 +398,7 @@ def _choose_four_for_court(db):
 
     units = _pair_units(db, eligible)
 
-    # expand to candidate players: take first ~10 by queue priority (units may add 2)
+    # expand to candidate players: take first ~10 by queue priority
     cand = []
     for u in units:
         for m in u["members"]:
@@ -420,15 +414,12 @@ def _choose_four_for_court(db):
 
     best_pick = None
 
-    # brute force combos of 4 from cand (<=10 => 210 combos)
-    # enforce: must include oldest to respect waiting time strongly
     from itertools import combinations
     for combo in combinations(cand, 4):
         if oldest not in combo:
             continue
 
-        # paired rule: if someone has paired_with that is eligible and queue,
-        # we prefer combos that include both if one included.
+        # paired rule
         valid = True
         for uid in combo:
             p = db["players"][uid]
@@ -450,14 +441,11 @@ def _choose_four_for_court(db):
             continue
         teamA, teamB, cost = split
 
-        # waiting priority: prefer larger total waiting time
         wt = 0.0
         for uid in combo:
             qts = float(db["players"][uid].get("queue_join_ts", now))
             wt += max(0.0, now - qts)
 
-        # final score: lower is better
-        # waiting time strongly reduces score
         score = cost - (wt / 60.0) * 35.0
 
         if best_pick is None or score < best_pick["score"]:
@@ -472,10 +460,9 @@ def _create_match_on_court(db, court_id, teamA_ids, teamB_ids, reason="auto"):
     now = _now()
     mid = _match_id()
 
-    # 1-minute "report to court" window; start timer after 1 minute
+    # 1-minute "report to court" window
     start_at = now + 60.0
 
-    # snapshot team mmr for record
     mmrA = sum(effective_mmr_for_matchmaking(db["players"][i]) for i in teamA_ids) / len(teamA_ids)
     mmrB = sum(effective_mmr_for_matchmaking(db["players"][i]) for i in teamB_ids) / len(teamB_ids)
 
@@ -488,21 +475,15 @@ def _create_match_on_court(db, court_id, teamA_ids, teamB_ids, reason="auto"):
         "team_b_ids": teamB_ids,
         "team_mmr_a": mmrA,
         "team_mmr_b": mmrB,
-        "status": "pending",          # pending|running
+        "status": "pending",
         "reason": reason
     }
 
-    # set players playing
     for uid in teamA_ids + teamB_ids:
         p = db["players"][uid]
         p["status"] = "playing"
-        # once matched, can't accept new pair (still can receive)
-        # keep queue_join_ts unchanged; will reset after finish/cancel
-
-        # ensure participant in current event
         _touch_participant(db, uid)
 
-    # attach to event
     evt = _current_event(db)
     if evt:
         evt.setdefault("matches", []).append(mid)
@@ -531,9 +512,12 @@ def _maybe_run_automatch(db):
 # Scoring / MMR
 # =========================
 def _validate_set_score(a, b, points, cap):
+    # BUG FIX: handle None/empty string gracefully
+    if a is None or b is None or a == "" or b == "":
+        return False, "Score must not be empty"
     try:
         a = int(a); b = int(b)
-    except Exception:
+    except (ValueError, TypeError):
         return False, "Score must be integer"
     if a < 0 or b < 0:
         return False, "Score must be >= 0"
@@ -546,11 +530,12 @@ def _validate_set_score(a, b, points, cap):
         if mx - mn < 2:
             return False, "Must win by 2 (unless cap)"
     else:
-        # at cap, allow win by 1 (e.g., 30-29)
+        # At cap: valid scores are cap-(cap-2) e.g. 30-28 (win by 2)
+        # and cap-(cap-1) e.g. 30-29 (cap rule, first to 30 wins)
         if mx != cap:
             return False, f"Max cap is {cap}"
-        if mx - mn < 1:
-            return False, "Invalid cap result"
+        if mn not in (cap - 1, cap - 2):
+            return False, f"At cap {cap}, score must be {cap}-{cap-1} or {cap}-{cap-2}"
     # prevent impossible big scores
     if mx > cap or mn > cap:
         return False, f"Max cap is {cap}"
@@ -558,25 +543,24 @@ def _validate_set_score(a, b, points, cap):
 
 def _winner_from_sets(set_scores, bo, points, cap):
     """
-    Returns:
-    {
-      sets_won_a, sets_won_b,
-      total_points_a, total_points_b,
-      winner ('A'|'B'),
-      clean_set_scores [(a,b),...]
-    }
-    BO2: winner by total points (per your requirement).
-    Stats: sets_w/sets_l counted per set.
+    Returns result dict or (None, error_msg).
+    BO2: winner by total points.
     """
     clean = []
     for s in set_scores:
-        if s is None: 
+        if s is None:
             continue
         a = s.get("a"); b = s.get("b")
+        # BUG FIX: skip sets where both scores are empty (BO3 set 3 not played)
+        if (a is None or a == "") and (b is None or b == ""):
+            continue
         ok, msg = _validate_set_score(a, b, points, cap)
         if not ok:
             return None, msg
         clean.append((int(a), int(b)))
+
+    if len(clean) == 0:
+        return None, "No valid sets submitted"
 
     if bo == 1 and len(clean) != 1:
         return None, "BO1 must have exactly 1 set"
@@ -585,6 +569,19 @@ def _winner_from_sets(set_scores, bo, points, cap):
     if bo == 3:
         if len(clean) < 2 or len(clean) > 3:
             return None, "BO3 must have 2 or 3 sets"
+        # BUG FIX: validate BO3 logic - if someone won 2-0, 3rd set shouldn't exist
+        sets_a = sum(1 for a, b in clean if a > b)
+        sets_b = sum(1 for a, b in clean if b > a)
+        if len(clean) == 3:
+            # after 2 sets, neither should have 2 wins already
+            sets_a_2 = sum(1 for a, b in clean[:2] if a > b)
+            sets_b_2 = sum(1 for a, b in clean[:2] if b > a)
+            if sets_a_2 >= 2 or sets_b_2 >= 2:
+                return None, "BO3: match was already decided after 2 sets, 3rd set invalid"
+        if len(clean) == 2:
+            # both sets must be won by same team (2-0)
+            if sets_a != 2 and sets_b != 2:
+                return None, "BO3: need a 3rd set (score is 1-1)"
 
     sets_won_a = 0
     sets_won_b = 0
@@ -605,7 +602,6 @@ def _winner_from_sets(set_scores, bo, points, cap):
         elif total_b > total_a:
             winner = "B"
         else:
-            # rare tie: fallback to sets won, then last set
             if sets_won_a > sets_won_b:
                 winner = "A"
             elif sets_won_b > sets_won_a:
@@ -630,14 +626,13 @@ def _elo_expected(ra, rb):
 def _score_multiplier(total_a, total_b, sets_won_a, sets_won_b):
     margin = abs(total_a - total_b)
     total = max(1, total_a + total_b)
-    m = margin / total  # 0..1
-    sf = 1.0 + min(0.6, m * 2.0)   # up to +0.6
+    m = margin / total
+    sf = 1.0 + min(0.6, m * 2.0)
     sd = abs(sets_won_a - sets_won_b)
-    sf += min(0.2, sd * 0.1)       # up to +0.2
+    sf += min(0.2, sd * 0.1)
     return min(1.8, sf)
 
 def _k_for_player(p):
-    # avg 25; calibration higher volatility
     return 50 if is_unranked(p) else 25
 
 def _apply_match_results(db, match_state, set_scores):
@@ -664,32 +659,25 @@ def _apply_match_results(db, match_state, set_scores):
 
     sf = _score_multiplier(res["total_points_a"], res["total_points_b"], res["sets_won_a"], res["sets_won_b"])
 
-    # team base delta (centered around 0)
     baseK = 25.0 * sf
     dA = baseK * (sA - ea)
     dB = -dA
 
-    # distribute to players with their own K (calibration swings more)
     mmr_changes = {}
-
-    # winners and losers ids
     win_ids = teamA if winner == "A" else teamB
     lose_ids = teamB if winner == "A" else teamA
 
-    # Per-player delta scale: calibrating players can move more
     for uid in teamA + teamB:
         p = db["players"][uid]
-        kp = _k_for_player(p) / 25.0  # 1.0 normal, 2.0 calibrate
+        kp = _k_for_player(p) / 25.0
         if uid in teamA:
             delta = dA * kp
         else:
             delta = dB * kp
         mmr_changes[uid] = int(round(delta))
 
-    # Apply mmr + stats (sets-based) + calibration
+    # Apply stats per set
     for (a_pts, b_pts) in res["clean"]:
-        # per set stats
-        # team A points_for += a_pts etc.
         for uid in teamA:
             p = db["players"][uid]
             p["points_for"] += a_pts
@@ -706,7 +694,7 @@ def _apply_match_results(db, match_state, set_scores):
             for uid in teamB: db["players"][uid]["sets_w"] += 1
             for uid in teamA: db["players"][uid]["sets_l"] += 1
 
-    # match W/L (by winner)
+    # match W/L
     for uid in win_ids:
         p = db["players"][uid]
         p["match_w"] += 1
@@ -717,7 +705,7 @@ def _apply_match_results(db, match_state, set_scores):
         p["match_l"] += 1
         p["cur_streak"] = 0
 
-    # update mmr + calibration counters
+    # update mmr + calibration
     for uid, delta in mmr_changes.items():
         p = db["players"][uid]
         p["mmr"] = int(p.get("mmr", 1000)) + int(delta)
@@ -730,7 +718,6 @@ def _apply_match_results(db, match_state, set_scores):
                 p["calib_losses"] += 1
                 p["calib_streak"] = 0
 
-    # cooldown compute (avg from last 10 matches)
     return {
         "winner": winner,
         "sets_won_a": res["sets_won_a"],
@@ -766,17 +753,14 @@ def _recompute_avg_match_minutes(db):
 def _cooldown_minutes(db):
     avg = int(db["system_settings"].get("avg_match_minutes", 12))
     total_courts = int(db["system_settings"].get("total_courts", 2))
-    # check-in count: queue/resting/playing
     active = 0
     for p in db["players"].values():
         if p.get("status") in ["queue", "resting", "playing"]:
             active += 1
     denom = max(1, total_courts * 4)
     ratio = active / denom
-    # cooldown ~ avg * ratio (cap)
     cd = int(round(avg * min(1.8, ratio)))
     cd = max(0, min(25, cd))
-    # if not enough players to rotate, no cooldown
     if active <= denom:
         cd = 0
     return cd
@@ -792,7 +776,7 @@ def _public_player_min(db, p):
         "pictureUrl": p.get("pictureUrl",""),
         "status": p.get("status","offline"),
         "mmr_display": mmr_display(p),
-        "mmr": int(p.get("mmr",1000)),  # backend only; frontend must hide if unranked
+        "mmr": int(p.get("mmr",1000)),
         "unranked": is_unranked(p),
         "calib_played": int(p.get("calib_played",0)),
         "rank_title": rank_title(int(p.get("mmr",1000))),
@@ -804,7 +788,16 @@ def _public_player_min(db, p):
         "auto_rest": bool(p.get("auto_rest",False)),
         "paired_with": p.get("paired_with"),
         "outgoing_req": p.get("outgoing_req"),
-        "incoming_reqs": p.get("incoming_reqs", [])
+        "incoming_reqs": p.get("incoming_reqs", []),
+        # BUG FIX: include stats needed by leaderboard
+        "points_for": int(p.get("points_for", 0)),
+        "points_against": int(p.get("points_against", 0)),
+        "sets_w": int(p.get("sets_w", 0)),
+        "sets_l": int(p.get("sets_l", 0)),
+        "match_w": int(p.get("match_w", 0)),
+        "match_l": int(p.get("match_l", 0)),
+        "best_streak": int(p.get("best_streak", 0)),
+        "cur_streak": int(p.get("cur_streak", 0)),
     }
 
 def _public_match_state(db, state):
@@ -872,10 +865,9 @@ def login():
 
     role = "super" if uid == SUPER_ADMIN_ID else ("mod" if uid in db["mod_ids"] else "user")
 
-    # ensure consistent
     save_db(db)
 
-    # return summary + incoming request names
+    # return incoming request info
     incoming = []
     for rid in p.get("incoming_reqs", []):
         rp = db["players"].get(rid)
@@ -910,7 +902,7 @@ def login():
 def get_dashboard():
     db = get_db()
 
-    # run automatch opportunistically via polling
+    # run automatch opportunistically
     changed = _maybe_run_automatch(db)
     if changed:
         save_db(db)
@@ -929,12 +921,13 @@ def get_dashboard():
     queue = [p for p in all_players if p["status"] == "queue"]
     resting = [p for p in all_players if p["status"] == "resting"]
 
-    # wait minutes (do not reset incorrectly)
     for p in queue + resting:
         qts = float(p.get("queue_join_ts", 0))
         p["wait_min"] = int(max(0, now - qts) // 60) if qts > 0 else 0
+        # BUG FIX: also provide wait_sec for more precise display
+        p["wait_sec"] = int(max(0, now - qts)) if qts > 0 else 0
         cd = float(p.get("cooldown_until", 0))
-        p["cooldown_left_min"] = int(max(0, cd - now) // 60) if cd > now else 0
+        p["cooldown_left_sec"] = int(max(0, cd - now)) if cd > now else 0
 
     queue.sort(key=lambda x: float(x.get("queue_join_ts", now)))
     resting.sort(key=lambda x: float(x.get("queue_join_ts", now)))
@@ -943,7 +936,6 @@ def get_dashboard():
     events = list(db["events"].values())
     for e in events:
         e["sort_key"] = float(e.get("datetime", 0))
-        # attach participants public info for billing
         joined = []
         for uid in e.get("participants", []):
             if uid in db["players"]:
@@ -953,26 +945,24 @@ def get_dashboard():
 
     # leaderboards
     def lb_mmr_key(p):
-        # unranked always bottom
         return (1 if p["unranked"] else 0, -int(p.get("mmr", 1000)))
     mmr_lb = sorted(all_players, key=lb_mmr_key)
 
-    points_lb = sorted(all_players, key=lambda p: (1 if p["unranked"] else 0, -(db["players"][p["id"]].get("points_for",0))),)
+    # BUG FIX: use points_for from all_players (now included)
+    points_lb = sorted(all_players, key=lambda p: (1 if p["unranked"] else 0, -int(p.get("points_for", 0))))
 
-    # winrate: use sets winrate; unranked bottom; no games => bottom among ranked too
     def wr_key(p):
-        pl = db["players"][p["id"]]
-        sw = int(pl.get("sets_w",0)); sl = int(pl.get("sets_l",0))
+        sw = int(p.get("sets_w",0)); sl = int(p.get("sets_l",0))
         total = sw + sl
         wr = (sw/total) if total > 0 else -1
         return (1 if p["unranked"] else 0, -wr, -total)
     winrate_lb = sorted(all_players, key=wr_key)
 
-    # history: newest first
     history = db.get("match_history", [])[:40]
 
     return jsonify({
         "system": db["system_settings"],
+        "mod_ids": db.get("mod_ids", []),   # BUG FIX: expose mod_ids for admin UI
         "courts": courts,
         "automatch": db["system_settings"]["automatch"],
         "queue": queue,
@@ -995,7 +985,6 @@ def get_player(uid):
     p = db["players"][uid]
     _ensure_player(p, uid)
 
-    # last 10 matches for this player
     last = []
     for m in db.get("match_history", []):
         if uid in m.get("team_a_ids", []) or uid in m.get("team_b_ids", []):
@@ -1045,7 +1034,6 @@ def toggle_status():
     p = db["players"][uid]
     cur = p.get("status","offline")
 
-    # do not allow toggle while playing
     if cur == "playing":
         return jsonify({"error":"Can't toggle while playing"}), 400
 
@@ -1055,11 +1043,11 @@ def toggle_status():
         p["cooldown_until"] = 0.0
         _touch_participant(db, uid)
     else:
-        # leaving (queue/resting) -> offline resets time
+        # leaving -> offline
         p["status"] = "offline"
         p["queue_join_ts"] = 0.0
         p["cooldown_until"] = 0.0
-        # if paired, unpair both
+        # unpair
         if p.get("paired_with"):
             other = p["paired_with"]
             if other in db["players"]:
@@ -1071,6 +1059,10 @@ def toggle_status():
             if tgt in db["players"]:
                 db["players"][tgt]["incoming_reqs"] = [x for x in db["players"][tgt].get("incoming_reqs",[]) if x != uid]
             p["outgoing_req"] = None
+        # BUG FIX: also remove self from all incoming_reqs of others
+        for other_uid, other_p in db["players"].items():
+            if uid in other_p.get("incoming_reqs", []):
+                other_p["incoming_reqs"] = [x for x in other_p["incoming_reqs"] if x != uid]
 
     save_db(db)
     return jsonify({"success": True, "status": p["status"]})
@@ -1115,23 +1107,22 @@ def partner_request():
     uid = d.get("userId"); target = d.get("targetId")
     if not uid or not target:
         return jsonify({"error":"missing data"}), 400
+    if uid == target:
+        return jsonify({"error":"Cannot request yourself"}), 400
     if uid not in db["players"] or target not in db["players"]:
         return jsonify({"error":"user not found"}), 404
 
     p = db["players"][uid]
     t = db["players"][target]
 
-    # cannot send if already paired
     if p.get("paired_with"):
         return jsonify({"error":"Already paired; unpair first"}), 400
 
-    # can only request one person
     if p.get("outgoing_req") and p["outgoing_req"] != target:
         return jsonify({"error":"You already requested someone; cancel first"}), 400
     if p.get("outgoing_req") == target:
         return jsonify({"success": True})
 
-    # add incoming to target
     inc = t.get("incoming_reqs", [])
     if uid not in inc:
         inc.append(uid)
@@ -1162,7 +1153,7 @@ def partner_respond():
     d = request.json or {}
     uid = d.get("userId")
     from_id = d.get("fromId")
-    action = d.get("action")  # accept | decline
+    action = d.get("action")
     if not uid or not from_id or action not in ["accept","decline"]:
         return jsonify({"error":"missing data"}), 400
     if uid not in db["players"] or from_id not in db["players"]:
@@ -1171,38 +1162,38 @@ def partner_respond():
     me = db["players"][uid]
     sender = db["players"][from_id]
 
-    # can receive many requests but accept only one
     if action == "accept":
         if me.get("paired_with"):
             return jsonify({"error":"You already paired; unpair first"}), 400
         if sender.get("paired_with"):
             return jsonify({"error":"Sender already paired"}), 400
 
-        # accepting cancels my outgoing (per requirement)
+        # cancel my outgoing
         if me.get("outgoing_req"):
             tgt = me["outgoing_req"]
             if tgt in db["players"]:
                 db["players"][tgt]["incoming_reqs"] = [x for x in db["players"][tgt].get("incoming_reqs",[]) if x != uid]
             me["outgoing_req"] = None
 
-        # and if sender had outgoing to someone else, cancel it
-        if sender.get("outgoing_req"):
+        # cancel sender's outgoing to someone else
+        if sender.get("outgoing_req") and sender["outgoing_req"] != uid:
             tgt = sender["outgoing_req"]
             if tgt in db["players"]:
                 db["players"][tgt]["incoming_reqs"] = [x for x in db["players"][tgt].get("incoming_reqs",[]) if x != from_id]
-            sender["outgoing_req"] = None
+        sender["outgoing_req"] = None
 
         # pair them
         me["paired_with"] = from_id
         sender["paired_with"] = uid
 
-        # keep other incoming requests (do not remove), but the accepted one should at least remain
+        # BUG FIX: remove accepted request from incoming list
+        me["incoming_reqs"] = [x for x in me.get("incoming_reqs", []) if x != from_id]
+
         save_db(db)
         return jsonify({"success": True, "paired_with": from_id})
 
-    # decline: keep in list or remove? We'll remove that request only
+    # decline
     me["incoming_reqs"] = [x for x in me.get("incoming_reqs", []) if x != from_id]
-    # sender still has outgoing to me? cancel it
     if sender.get("outgoing_req") == uid:
         sender["outgoing_req"] = None
     save_db(db)
@@ -1228,10 +1219,9 @@ def partner_unpair():
 # =========================
 @app.route("/api/matchmake", methods=["POST"])
 def matchmake():
-    """Manual trigger: fill courts that are empty AND automatch is OFF (or if user requests courtId)."""
     db = get_db()
     d = request.json or {}
-    court_id = d.get("courtId")  # optional
+    court_id = d.get("courtId")
 
     if not db["system_settings"].get("is_session_active"):
         return jsonify({"error":"Session not active"}), 400
@@ -1282,7 +1272,6 @@ def manual_matchmake():
         if x not in db["players"]:
             return jsonify({"error":"Player not found"}), 400
 
-    # manual: team split 2+2 in order
     teamA = [pids[0], pids[1]]
     teamB = [pids[2], pids[3]]
     _create_match_on_court(db, cid, teamA, teamB, reason="manual_admin")
@@ -1302,30 +1291,25 @@ def cancel_match():
     if not state:
         return jsonify({"error":"No match"}), 400
 
-    # only players in that match or mod/super
     is_staff = uid == SUPER_ADMIN_ID or uid in db["mod_ids"]
     in_match = uid in state.get("team_a_ids", []) or uid in state.get("team_b_ids", [])
     if not (is_staff or in_match):
         return jsonify({"error":"Unauthorized"}), 403
 
-    # add avoid signature to prevent same 4 immediately
     sig = ",".join(sorted(state.get("team_a_ids", []) + state.get("team_b_ids", [])))
     db["system_settings"].setdefault("avoid_4", []).append({"sig": sig, "ts": _now(), "reason": reason})
 
-    # revert players to queue or resting (no mmr change, no history)
     now = _now()
     for pid in state.get("team_a_ids", []) + state.get("team_b_ids", []):
         p = db["players"].get(pid)
-        if not p: 
+        if not p:
             continue
-        # return to queue
         p["status"] = "queue"
-        p["queue_join_ts"] = now  # reset wait after a match attempt
+        p["queue_join_ts"] = now
         p["cooldown_until"] = 0.0
 
     db["courts"][cid] = None
 
-    # try automatch (if enabled)
     changed = _maybe_run_automatch(db)
     save_db(db)
     return jsonify({"success": True, "automatch_triggered": changed})
@@ -1344,13 +1328,11 @@ def submit_match():
     if not state:
         return jsonify({"error":"No match"}), 400
 
-    # auth: only players in match or mod/super
     is_staff = uid == SUPER_ADMIN_ID or uid in db["mod_ids"]
     in_match = uid in state.get("team_a_ids", []) or uid in state.get("team_b_ids", [])
     if not (is_staff or in_match):
         return jsonify({"error":"Unauthorized"}), 403
 
-    # apply result
     result, msg = _apply_match_results(db, state, set_scores)
     if not result:
         return jsonify({"error": msg}), 400
@@ -1359,7 +1341,6 @@ def submit_match():
     start_at = float(state.get("start_at", now))
     duration = int(max(0, now - start_at))
 
-    # record match history
     match_record = {
         "match_id": state.get("match_id"),
         "event_id": db["system_settings"].get("current_event_id"),
@@ -1385,10 +1366,8 @@ def submit_match():
     }
     db["match_history"].insert(0, match_record)
 
-    # recompute avg match minutes
     _recompute_avg_match_minutes(db)
 
-    # finish: return players to queue/resting, reset wait time consistently
     cd_min = _cooldown_minutes(db)
     cd_sec = cd_min * 60
     for pid in state.get("team_a_ids", []) + state.get("team_b_ids", []):
@@ -1403,10 +1382,8 @@ def submit_match():
             p["status"] = "queue"
             p["cooldown_until"] = 0.0
 
-    # clear court
     db["courts"][cid] = None
 
-    # opportunistic automatch
     changed = _maybe_run_automatch(db)
 
     save_db(db)
@@ -1427,7 +1404,6 @@ def admin_toggle_session():
         return jsonify({"error":"bad action"}), 400
 
     if action == "start":
-        # options
         points = int(d.get("points", 21))
         bo = int(d.get("bo", 1))
         notify = bool(d.get("notify", False))
@@ -1441,7 +1417,6 @@ def admin_toggle_session():
         db["system_settings"]["notify_enabled"] = notify
         db["system_settings"]["scoring"] = {"points": points, "bo": bo, "cap": 30}
 
-        # create event
         today = datetime.now().strftime("%d/%m/%Y")
         eid = _create_event(db, name=f"ก๊วน {today}", dt_ts=_now(), status="active")
         db["system_settings"]["current_event_id"] = eid
@@ -1453,16 +1428,13 @@ def admin_toggle_session():
             db["events"][eid]["status"] = "ended"
         db["system_settings"]["current_event_id"] = None
 
-        # clear courts
         for cid in list(db["courts"].keys()):
             db["courts"][cid] = None
 
-        # set everyone offline (keep mmr/stats)
         for p in db["players"].values():
             p["status"] = "offline"
             p["queue_join_ts"] = 0.0
             p["cooldown_until"] = 0.0
-            # pairing stays? you asked earlier—better reset for next session
             p["paired_with"] = None
             p["outgoing_req"] = None
             p["incoming_reqs"] = []
@@ -1499,7 +1471,6 @@ def admin_set_automatch():
     if cid not in db["system_settings"]["automatch"]:
         return jsonify({"error":"invalid court"}), 400
     db["system_settings"]["automatch"][cid] = val
-    # if enabling and empty, try fill immediately
     if val and db["courts"].get(cid) is None:
         _maybe_run_automatch(db)
     save_db(db)
@@ -1574,7 +1545,6 @@ def event_delete():
     eid = d.get("eventId")
     if not eid or eid not in db["events"]:
         return jsonify({"error":"Not found"}), 404
-    # prevent deleting current active event
     if db["system_settings"].get("current_event_id") == eid and db["system_settings"].get("is_session_active"):
         return jsonify({"error":"Can't delete active session event"}), 400
     db["events"].pop(eid, None)
@@ -1583,5 +1553,4 @@ def event_delete():
 
 
 if __name__ == "__main__":
-    # local dev
     app.run(host="0.0.0.0", port=5000, debug=True)
