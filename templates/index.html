@@ -627,6 +627,7 @@
           user.rank_color = me.rank_color;
           user.wr = me.wr;
           user.wr_badge = me.wr_badge;
+          if(me.progress) user.progress = me.progress;
         }
       }
       renderUserTop();
@@ -893,18 +894,22 @@
         const cdMin = Math.ceil(cdSec / 60);
         const cd = cdSec > 0 ? `<span class="badge badge-warning badge-xs ml-1">CD ${cdMin}m</span>` : "";
         const pair = p.paired_with ? `<span class="badge badge-secondary badge-xs ml-1">PAIR</span>` : "";
+        const prio = p.priority_match ? `<span class="badge badge-error badge-xs ml-1">⚡ แซงคิว</span>` : "";
+        const skipBtn = isStaff() && !p.priority_match
+          ? `<button class="btn btn-xs btn-ghost text-orange-500" onclick="event.stopPropagation();skipQueue('${p.id}')" title="แซงคิว">⚡</button>`
+          : '';
         return `
           <tr class="player-row">
             <td onclick="openProfile('${p.id}')" class="cursor-pointer">
               <div class="flex items-center gap-2">
                 <img src="${p.pictureUrl||'https://ui-avatars.com/api/?name=?'}" class="w-7 h-7 rounded-full">
                 <div class="flex flex-col leading-tight">
-                  <span class="font-bold">${p.nickname} ${pair}</span>
+                  <span class="font-bold">${p.nickname} ${pair} ${prio}</span>
                   <span class="text-[10px] text-gray-500">${p.unranked ? p.mmr_display : p.rank_title}</span>
                 </div>
               </div>
             </td>
-            <td class="text-right text-xs text-gray-500">${p.wait_min||0} นาที ${cd}</td>
+            <td class="text-right text-xs text-gray-500 whitespace-nowrap">${p.wait_min||0} นาที ${cd} ${skipBtn}</td>
           </tr>
         `;
       }).join('') : `<tr><td class="text-center text-gray-400 py-4">ยังไม่มีคนรอคิว</td></tr>`;
@@ -1480,6 +1485,21 @@
       })).json();
       if(r.error) return alert(r.error);
       toast("ยกเลิกเข้าร่วมแล้ว");
+      await refresh();
+    }
+
+    async function skipQueue(targetId){
+      if(!confirm("แซงคิวให้ผู้เล่นนี้?")) return;
+      const r = await (await fetch('/api/admin/skip_queue',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, targetId:targetId})
+      })).json();
+      if(r.error) return alert(r.error);
+      if(r.auto_matched){
+        toast("⚡ แซงคิวสำเร็จ! จับคู่แล้ว");
+      } else {
+        toast("⚡ ตั้ง Priority แล้ว (รอคนเพียงพอ)");
+      }
       await refresh();
     }
 

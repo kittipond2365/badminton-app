@@ -3,8 +3,10 @@ import os
 import time
 import uuid
 import math
+import random
 import threading
 from copy import deepcopy
+from itertools import combinations
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, render_template
 
@@ -40,6 +42,8 @@ DEFAULT_DB = {
         "notify_enabled": False,     # mod option on start session
         "automatch": {},             # {"1": false, "2": true, ...}
         "avoid_4": [],               # recent canceled 4-signatures [{"sig":"a,b,c,d","ts":...}]
+        "recent_teammates": {},      # "u|v" -> {"ts": float, "count": int}
+        "recent_opponents": {},      # "u|v" -> {"ts": float, "count": int}
         "avg_match_minutes": 12
     },
     "mod_ids": [],
@@ -120,6 +124,7 @@ def _ensure_player(p, uid):
     p.setdefault("queue_join_ts", 0.0)
     p.setdefault("cooldown_until", 0.0)
     p.setdefault("auto_rest", False)
+    p.setdefault("priority_match", False)  # mod can set to skip queue
 
     # calibration
     p.setdefault("calib_played", 0)
@@ -280,8 +285,24 @@ def _create_event(db, name, dt_ts=None, status="active", scoring=None, location=
     return eid
 
 # =========================
-# Matchmaking core
+# Matchmaking core (v2: Wait Window + Diversity + Priority)
 # =========================
+# --- TUNING CONSTANTS ---
+WAIT_WINDOW_SEC = 180        # 3 minutes base window
+WAIT_EXPAND_STEPS = [300, 480, 720]  # 5, 8, 12 min progressive expansion
+W_WAIT = 35.0                # weight for wait-time bonus (more wait = preferred)
+ALPHA_DIFF = 2.5             # weight for team MMR diff
+BETA_WITHIN = 1.8            # weight for within-team disparity (anti extreme-carry)
+HARD_SKILL_THRESHOLD = 500   # discard combo if diff > this when alternatives exist
+DIVERSITY_WINDOW_SEC = 3600  # 60 min for diversity tracking cleanup
+TEAMMATE_PENALTIES = [1200, 700, 400, 200, 100]  # last 1–5 matches
+OPPONENT_PENALTIES = [600, 300, 150, 80]          # last 1–4 matches
+GROUP4_HARD_BAN_SEC = 600    # 10 min
+GROUP4_SOFT_PENALTY = 2000   # within soft window
+GROUP4_SOFT_SEC = 3600       # 60 min
+PRIORITY_WAIT_BOOST = 9999   # massive boost for priority players
+NOISE_SCALE = 5.0            # random jitter
+
 def _eligible_players(db):
     now = _now()
     players = []
@@ -307,69 +328,138 @@ def _pair_units(db, players_sorted):
         if paired and paired in db["players"]:
             q = db["players"][paired]
             if q.get("status") == "queue" and float(q.get("cooldown_until", 0)) <= _now():
-                # unit of 2
-                units.append({
-                    "members": [p, q],
-                    "ts": min(float(p.get("queue_join_ts", _now())), float(q.get("queue_join_ts", _now())))
-                })
+                ts = min(float(p.get("queue_join_ts", _now())), float(q.get("queue_join_ts", _now())))
+                units.append({"members": [p, q], "ts": ts, "size": 2})
                 seen.add(uid); seen.add(paired)
                 continue
-        # solo
-        units.append({"members":[p], "ts": float(p.get("queue_join_ts", _now()))})
+        units.append({"members": [p], "ts": float(p.get("queue_join_ts", _now())), "size": 1})
         seen.add(uid)
     units.sort(key=lambda u: u["ts"])
     return units
 
-def _recent_avoid_penalty(db, four_ids):
-    sig = ",".join(sorted(four_ids))
-    now = _now()
-    keep = []
-    pen = 0
+def _player_wait(p, now):
+    """Wait in seconds, boosted by priority flag."""
+    base = max(0.0, now - float(p.get("queue_join_ts", now)))
+    if p.get("priority_match"):
+        base += PRIORITY_WAIT_BOOST
+    return base
+
+def _build_candidate_pool(db, units, now):
+    """Build candidate pool using wait window."""
+    if not units:
+        return [], []
+
+    # Compute wait for each unit
+    for u in units:
+        u["wait"] = max(_player_wait(m, now) for m in u["members"])
+
+    oldest_wait = max(u["wait"] for u in units)
+
+    # Try progressively wider windows
+    windows = [WAIT_WINDOW_SEC] + WAIT_EXPAND_STEPS + [999999]
+    for window in windows:
+        threshold = oldest_wait - window
+        pool = [u for u in units if u["wait"] >= threshold]
+        # Count total player slots
+        total_slots = sum(u["size"] for u in pool)
+        if total_slots >= 4:
+            return pool, [uid for u in pool for uid in [m["id"] for m in u["members"]]]
+    return [], []
+
+def _pair_key(a, b):
+    return "|".join(sorted([a, b]))
+
+def _group4_sig(four_ids):
+    return ",".join(sorted(four_ids))
+
+def _cleanup_diversity(db, now):
+    """Clean old diversity entries."""
+    for store_key in ["recent_teammates", "recent_opponents"]:
+        store = db["system_settings"].setdefault(store_key, {})
+        to_del = [k for k, v in store.items() if now - float(v.get("ts", 0)) > DIVERSITY_WINDOW_SEC]
+        for k in to_del:
+            del store[k]
+
+    avoid = db["system_settings"].setdefault("avoid_4", [])
+    db["system_settings"]["avoid_4"] = [
+        item for item in avoid
+        if now - float(item.get("ts", 0)) <= GROUP4_SOFT_SEC
+    ]
+
+def _score_group4_diversity(db, four_ids, now):
+    """Check group-of-4 ban/penalty."""
+    sig = _group4_sig(four_ids)
     for item in db["system_settings"].get("avoid_4", []):
-        try:
-            ts = float(item.get("ts", 0))
-            if now - ts <= 600:  # 10 minutes window
-                keep.append(item)
-                if item.get("sig") == sig:
-                    pen = 10_000
-        except Exception:
+        if item.get("sig") != sig:
             continue
-    db["system_settings"]["avoid_4"] = keep
-    return pen
+        age = now - float(item.get("ts", 0))
+        if age <= GROUP4_HARD_BAN_SEC:
+            return None  # hard ban
+        if age <= GROUP4_SOFT_SEC:
+            return GROUP4_SOFT_PENALTY * (1.0 - age / GROUP4_SOFT_SEC)
+    return 0
 
-def _repeat_teammate_penalty(db, team_ids):
-    # penalty if teammates were together in last 2 matches
-    recent = db.get("match_history", [])[:2]
-    s = set(team_ids)
+def _score_pair_diversity(db, team_ids, opponent_ids, partner_pair_set):
+    """Score teammate + opponent repetition penalties."""
     pen = 0
-    for m in recent:
-        ta = set(m.get("team_a_ids", []))
-        tb = set(m.get("team_b_ids", []))
-        if s.issubset(ta) or s.issubset(tb):
-            pen += 800
+    teammates_store = db["system_settings"].get("recent_teammates", {})
+    opponents_store = db["system_settings"].get("recent_opponents", {})
+
+    # Teammate penalty (exclude partner pair - they chose to be together)
+    for i in range(len(team_ids)):
+        for j in range(i + 1, len(team_ids)):
+            pair = (team_ids[i], team_ids[j])
+            if tuple(sorted(pair)) in partner_pair_set:
+                continue  # partner pair exemption
+            key = _pair_key(team_ids[i], team_ids[j])
+            entry = teammates_store.get(key)
+            if entry:
+                count = int(entry.get("count", 0))
+                if count > 0 and count <= len(TEAMMATE_PENALTIES):
+                    pen += TEAMMATE_PENALTIES[count - 1]
+                elif count > len(TEAMMATE_PENALTIES):
+                    pen += TEAMMATE_PENALTIES[-1]
+
+    # Opponent penalty (between team_ids and opponent_ids)
+    for u in team_ids:
+        for v in opponent_ids:
+            key = _pair_key(u, v)
+            entry = opponents_store.get(key)
+            if entry:
+                count = int(entry.get("count", 0))
+                if count > 0 and count <= len(OPPONENT_PENALTIES):
+                    pen += OPPONENT_PENALTIES[count - 1]
+                elif count > len(OPPONENT_PENALTIES):
+                    pen += OPPONENT_PENALTIES[-1]
+
     return pen
 
-def _team_cost(db, teamA, teamB):
-    # fairness: team avg diff + within-team disparity + repeat teammate
+def _skill_score(db, teamA, teamB):
+    """Compute skill fairness score: team diff + anti-carry."""
     mmrA = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamA]
     mmrB = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamB]
-    avgA = sum(mmrA) / len(mmrA)
-    avgB = sum(mmrB) / len(mmrB)
-    diff = abs(avgA - avgB)
 
+    diff_sum = abs(sum(mmrA) - sum(mmrB))
     dispA = max(mmrA) - min(mmrA)
     dispB = max(mmrB) - min(mmrB)
-
     within = dispA + dispB
 
-    pen = 0
-    pen += _repeat_teammate_penalty(db, teamA)
-    pen += _repeat_teammate_penalty(db, teamB)
+    return ALPHA_DIFF * diff_sum + BETA_WITHIN * within
 
-    return diff * 2.0 + within * 1.2 + pen
+def _get_partner_pairs(db, four_ids):
+    """Get set of partner pairs in these 4 players."""
+    pairs = set()
+    for uid in four_ids:
+        p = db["players"].get(uid)
+        if not p:
+            continue
+        pw = p.get("paired_with")
+        if pw and pw in four_ids:
+            pairs.add(tuple(sorted([uid, pw])))
+    return pairs
 
-def _best_split_for_four(db, four_ids):
-    """Return best (teamA_ids, teamB_ids, cost) respecting paired units."""
+def _best_split_for_four(db, four_ids, now):
+    """Return best (teamA_ids, teamB_ids, total_score) respecting pairs. None if no valid split."""
     a = four_ids
     splits = [
         ([a[0], a[1]], [a[2], a[3]]),
@@ -377,90 +467,145 @@ def _best_split_for_four(db, four_ids):
         ([a[0], a[3]], [a[1], a[2]]),
     ]
 
-    pairs = set()
-    for uid in four_ids:
-        p = db["players"].get(uid)
-        if not p: continue
-        pw = p.get("paired_with")
-        if pw and pw in four_ids:
-            pairs.add(tuple(sorted([uid, pw])))
+    partner_pairs = _get_partner_pairs(db, four_ids)
+
+    # Group-of-4 diversity
+    g4_pen = _score_group4_diversity(db, four_ids, now)
+    if g4_pen is None:
+        return None  # hard banned
+
+    # Wait score (higher total wait = better = lower total score)
+    total_wait_min = sum(_player_wait(db["players"][uid], now) for uid in four_ids) / 60.0
+    s_wait = -W_WAIT * total_wait_min
 
     best = None
     for tA, tB in splits:
+        # Enforce partner pair must be same team
         ok = True
-        for u, v in pairs:
+        for u, v in partner_pairs:
             if (u in tA and v in tB) or (u in tB and v in tA):
                 ok = False
                 break
         if not ok:
             continue
-        c = _team_cost(db, tA, tB)
-        if best is None or c < best[2]:
-            best = (tA, tB, c)
+
+        s_skill = _skill_score(db, tA, tB)
+
+        # Diversity score for this split
+        s_div_a = _score_pair_diversity(db, tA, tB, partner_pairs)
+        s_div_b = _score_pair_diversity(db, tB, tA, partner_pairs)
+        s_div = s_div_a + s_div_b + g4_pen
+
+        noise = random.uniform(0, NOISE_SCALE)
+
+        total = s_wait + s_skill + s_div + noise
+
+        if best is None or total < best[2]:
+            best = (tA, tB, total)
+
     return best
 
 def _choose_four_for_court(db):
-    """Waiting time first, mmr fairness second."""
+    """Main matchmaking: Wait Window + Skill + Diversity + Priority."""
     eligible = _eligible_players(db)
     if len(eligible) < 4:
         return None
 
+    now = _now()
     units = _pair_units(db, eligible)
+    _cleanup_diversity(db, now)
 
-    # expand to candidate players: take first ~10 by queue priority
-    cand = []
-    for u in units:
-        for m in u["members"]:
-            if m["id"] not in cand:
-                cand.append(m["id"])
-        if len(cand) >= 10:
-            break
+    pool_units, pool_ids = _build_candidate_pool(db, units, now)
+    if len(pool_ids) < 4:
+        return None
+
+    # Limit candidates for performance (first ~14 by queue priority)
+    cand = pool_ids[:14]
     if len(cand) < 4:
         return None
 
-    oldest = cand[0]
-    now = _now()
-
     best_pick = None
+    has_alternative = len(cand) > 4
 
-    from itertools import combinations
     for combo in combinations(cand, 4):
-        if oldest not in combo:
-            continue
+        combo = list(combo)
 
-        # paired rule
+        # Paired rule: if someone is paired, partner must be in combo
         valid = True
         for uid in combo:
             p = db["players"][uid]
             pw = p.get("paired_with")
-            if pw and db["players"].get(pw) and db["players"][pw].get("status") == "queue":
+            if pw and pw in db["players"] and db["players"][pw].get("status") == "queue":
                 if pw not in combo:
                     valid = False
                     break
         if not valid:
             continue
 
-        # avoid canceled same-4
-        avoid_pen = _recent_avoid_penalty(db, list(combo))
-        if avoid_pen >= 10_000:
-            continue
-
-        split = _best_split_for_four(db, list(combo))
+        split = _best_split_for_four(db, combo, now)
         if not split:
             continue
-        teamA, teamB, cost = split
+        teamA, teamB, score = split
 
-        wt = 0.0
-        for uid in combo:
-            qts = float(db["players"][uid].get("queue_join_ts", now))
-            wt += max(0.0, now - qts)
-
-        score = cost - (wt / 60.0) * 35.0
+        # Hard skill cap: discard extreme unfairness if alternatives exist
+        if has_alternative:
+            mmrA = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamA]
+            mmrB = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamB]
+            if abs(sum(mmrA) - sum(mmrB)) > HARD_SKILL_THRESHOLD:
+                continue
 
         if best_pick is None or score < best_pick["score"]:
-            best_pick = {"combo": list(combo), "teamA": teamA, "teamB": teamB, "score": score}
+            best_pick = {"combo": combo, "teamA": teamA, "teamB": teamB, "score": score}
+
+    # Clear priority_match flag for matched players
+    if best_pick:
+        for uid in best_pick["combo"]:
+            db["players"][uid]["priority_match"] = False
 
     return best_pick
+
+def _update_diversity_after_match(db, team_a_ids, team_b_ids):
+    """Update diversity tracking after a match finishes or starts."""
+    now = _now()
+    tm_store = db["system_settings"].setdefault("recent_teammates", {})
+    op_store = db["system_settings"].setdefault("recent_opponents", {})
+
+    # Update teammates
+    for team in [team_a_ids, team_b_ids]:
+        for i in range(len(team)):
+            for j in range(i + 1, len(team)):
+                key = _pair_key(team[i], team[j])
+                entry = tm_store.get(key, {"ts": 0, "count": 0})
+                entry["ts"] = now
+                entry["count"] = int(entry.get("count", 0)) + 1
+                tm_store[key] = entry
+
+    # Update opponents
+    for u in team_a_ids:
+        for v in team_b_ids:
+            key = _pair_key(u, v)
+            entry = op_store.get(key, {"ts": 0, "count": 0})
+            entry["ts"] = now
+            entry["count"] = int(entry.get("count", 0)) + 1
+            op_store[key] = entry
+
+    # Update group4
+    sig = _group4_sig(team_a_ids + team_b_ids)
+    avoid = db["system_settings"].setdefault("avoid_4", [])
+    avoid.append({"sig": sig, "ts": now})
+
+def _recent_avoid_penalty(db, four_ids):
+    """Legacy: check if this 4-group is hard-banned."""
+    sig = _group4_sig(four_ids)
+    now = _now()
+    for item in db["system_settings"].get("avoid_4", []):
+        try:
+            ts = float(item.get("ts", 0))
+            if now - ts <= GROUP4_HARD_BAN_SEC and item.get("sig") == sig:
+                return 10_000
+        except Exception:
+            continue
+    return 0
 
 def _match_id():
     return str(uuid.uuid4())[:10]
@@ -498,6 +643,10 @@ def _create_match_on_court(db, court_id, teamA_ids, teamB_ids, reason="auto"):
         evt.setdefault("matches", []).append(mid)
 
     db["courts"][str(court_id)] = match_state
+
+    # Track diversity for future matchmaking
+    _update_diversity_after_match(db, teamA_ids, teamB_ids)
+
     return match_state
 
 def _maybe_run_automatch(db):
@@ -821,6 +970,7 @@ def _public_player_min(db, p):
         "queue_join_ts": float(p.get("queue_join_ts",0)),
         "cooldown_until": float(p.get("cooldown_until",0)),
         "auto_rest": bool(p.get("auto_rest",False)),
+        "priority_match": bool(p.get("priority_match", False)),
         "paired_with": p.get("paired_with"),
         "outgoing_req": p.get("outgoing_req"),
         "incoming_reqs": p.get("incoming_reqs", []),
@@ -833,6 +983,7 @@ def _public_player_min(db, p):
         "match_l": int(p.get("match_l", 0)),
         "best_streak": int(p.get("best_streak", 0)),
         "cur_streak": int(p.get("cur_streak", 0)),
+        "progress": progression_bar(p),
     }
 
 def _public_match_state(db, state):
@@ -1513,6 +1664,7 @@ def admin_toggle_session():
             p["paired_with"] = None
             p["outgoing_req"] = None
             p["incoming_reqs"] = []
+            p["priority_match"] = False
 
     save_db(db)
     return jsonify({"success": True})
@@ -1590,6 +1742,35 @@ def admin_set_mmr():
     db["players"][tid]["mmr"] = nv
     save_db(db)
     return jsonify({"success": True})
+
+@app.route("/api/admin/skip_queue", methods=["POST"])
+def admin_skip_queue():
+    db = get_db()
+    d = request.json or {}
+    uid = d.get("userId")
+    if uid != SUPER_ADMIN_ID and uid not in db["mod_ids"]:
+        return jsonify({"error":"Unauthorized"}), 403
+
+    target = d.get("targetId")
+    if not target or target not in db["players"]:
+        return jsonify({"error":"ไม่พบผู้เล่น"}), 404
+
+    p = db["players"][target]
+    if p.get("status") != "queue":
+        return jsonify({"error":"ผู้เล่นยังไม่ได้อยู่ในคิว"}), 400
+
+    p["priority_match"] = True
+
+    # Also set priority for partner if paired
+    pw = p.get("paired_with")
+    if pw and pw in db["players"] and db["players"][pw].get("status") == "queue":
+        db["players"][pw]["priority_match"] = True
+
+    # Try to run automatch immediately
+    changed = _maybe_run_automatch(db)
+
+    save_db(db)
+    return jsonify({"success": True, "auto_matched": changed})
 
 @app.route("/api/event/create", methods=["POST"])
 def event_create():
