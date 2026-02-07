@@ -180,15 +180,15 @@
             <img id="me-big-pic" src="">
           </div>
         </div>
-        <div class="flex-1">
-          <div class="text-lg font-black" id="me-name">...</div>
-          <div class="flex gap-2 items-center mt-1">
-            <span class="badge" id="me-rank-badge">...</span>
-            <span class="badge" id="me-wr-badge">WR ...%</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-lg font-black truncate" id="me-name">...</div>
+          <div class="flex flex-wrap gap-1 items-center mt-1">
+            <span class="badge badge-sm text-xs whitespace-nowrap" id="me-rank-badge">...</span>
+            <span class="badge badge-sm text-xs whitespace-nowrap" id="me-wr-badge">WR ...%</span>
           </div>
           <div class="text-sm font-bold text-indigo-600 mt-1" id="me-mmr-big">...</div>
         </div>
-        <button class="btn btn-sm btn-outline" onclick="openProfile(user.id)">
+        <button class="btn btn-sm btn-outline shrink-0" onclick="openProfile(user.id)">
           ดูโปรไฟล์เต็ม
         </button>
       </div>
@@ -457,11 +457,11 @@
             <img id="pf-pic" src="">
           </div>
         </div>
-        <div class="flex-1">
-          <div class="text-lg font-black" id="pf-name">...</div>
-          <div class="flex gap-2 items-center mt-1">
-            <span class="badge" id="pf-rank">...</span>
-            <span class="badge" id="pf-wr">WR ...%</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-lg font-black truncate" id="pf-name">...</div>
+          <div class="flex flex-wrap gap-1 items-center mt-1">
+            <span class="badge badge-sm text-xs whitespace-nowrap" id="pf-rank">...</span>
+            <span class="badge badge-sm text-xs whitespace-nowrap" id="pf-wr">WR ...%</span>
           </div>
           <div class="text-sm font-bold text-indigo-600 mt-1" id="pf-mmr">...</div>
         </div>
@@ -596,9 +596,9 @@
       document.getElementById('me-big-pic').src = user.pictureUrl || "https://ui-avatars.com/api/?name=User";
       document.getElementById('me-name').innerText = user.nickname || "User";
       document.getElementById('me-mmr-big').innerText = user.mmr_display || "...";
-      document.getElementById('me-rank-badge').className = `badge ${user.rank_color||'badge-primary'}`;
+      document.getElementById('me-rank-badge').className = `badge badge-sm text-xs whitespace-nowrap ${user.rank_color||'badge-primary'}`;
       document.getElementById('me-rank-badge').innerText = user.rank_title || "...";
-      document.getElementById('me-wr-badge').className = `badge ${user.wr_badge||'badge-ghost'}`;
+      document.getElementById('me-wr-badge').className = `badge badge-sm text-xs whitespace-nowrap ${user.wr_badge||'badge-ghost'}`;
       document.getElementById('me-wr-badge').innerText = `WR ${user.wr||0}%`;
 
       const prog = user.progress || {pct:0,label:"",type:"mmr"};
@@ -1989,9 +1989,9 @@
         document.getElementById('pf-pic').src = r.pictureUrl || "https://ui-avatars.com/api/?name=User";
         document.getElementById('pf-name').innerText = r.nickname;
         document.getElementById('pf-mmr').innerText = r.unranked ? r.mmr_display : `MMR ${r.mmr}`;
-        document.getElementById('pf-rank').className = `badge ${r.rank_color||'badge-primary'}`;
+        document.getElementById('pf-rank').className = `badge badge-sm text-xs whitespace-nowrap ${r.rank_color||'badge-primary'}`;
         document.getElementById('pf-rank').innerText = r.unranked ? r.mmr_display : r.rank_title;
-        document.getElementById('pf-wr').className = `badge ${r.wr_badge||'badge-ghost'}`;
+        document.getElementById('pf-wr').className = `badge badge-sm text-xs whitespace-nowrap ${r.wr_badge||'badge-ghost'}`;
         document.getElementById('pf-wr').innerText = `WR ${r.wr||0}%`;
 
         const prog = r.progress || {pct:0,label:"",type:"mmr"};
