@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>izesquad</title>
 
-  <!-- LIFF SDK (มี fallback ใน JS ถ้าโหลดไม่ทัน/โดนบล็อก) -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 
   <link href="https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css" rel="stylesheet" />
@@ -17,11 +16,8 @@
 </head>
 
 <body class="bg-slate-100 min-h-screen pb-24">
-
-  <!-- TOAST -->
   <div class="toast toast-top toast-center z-[9999]" id="toast-root"></div>
 
-  <!-- NAV -->
   <div class="navbar bg-white shadow-sm px-4 sticky top-0 z-50">
     <div class="flex-1">
       <span class="text-xl font-black text-indigo-600 italic">izesquad <i class="fa-solid fa-bolt text-yellow-400"></i></span>
@@ -49,17 +45,17 @@
     </div>
   </div>
 
-  <!-- TABS -->
   <div class="px-2 mt-3">
     <div role="tablist" class="tabs tabs-boxed bg-white shadow-sm font-bold">
       <a role="tab" id="tab-btn-live" class="tab tab-active" onclick="switchTab('live')">สนาม</a>
+      <a role="tab" id="tab-btn-stats" class="tab" onclick="switchTab('stats')">สถิติ</a>
       <a role="tab" id="tab-btn-history" class="tab" onclick="switchTab('history')">ประวัติ</a>
       <a role="tab" id="tab-btn-rank" class="tab" onclick="switchTab('rank')">Rank</a>
       <a role="tab" id="tab-btn-events" class="tab" onclick="switchTab('events')">Events</a>
     </div>
   </div>
 
-  <!-- TAB LIVE -->
+  <!-- LIVE -->
   <div id="tab-live" class="p-4 max-w-md mx-auto">
     <div id="session-alert" class="hidden alert alert-warning mb-4 shadow-sm">
       <i class="fa-solid fa-triangle-exclamation"></i><span>ยังไม่เริ่มก๊วน (รอ Mod กดเริ่ม)</span>
@@ -74,7 +70,6 @@
 
         <button id="btn-checkin" onclick="toggleStatus()" class="btn btn-primary w-full">Loading...</button>
 
-        <!-- Partner Request -->
         <div id="partner-req-box" class="mt-3 hidden">
           <div class="divider text-xs text-gray-400 my-1">ขอจับคู่</div>
 
@@ -92,7 +87,6 @@
             <button onclick="cancelRequest()" class="btn btn-xs btn-ghost text-red-500">ยกเลิก</button>
           </div>
 
-          <!-- Incoming -->
           <div id="incoming-box" class="hidden mt-3">
             <div class="divider text-xs text-gray-400 my-1">มีคนขอเป็นคู่กับคุณ</div>
             <div id="incoming-list" class="space-y-2"></div>
@@ -101,13 +95,16 @@
       </div>
     </div>
 
-    <!-- STAFF: auto match toggle + controls -->
+    <!-- STAFF: per-court automatch toggles -->
     <div id="staff-extra" class="hidden mb-3 space-y-2">
-      <div class="bg-white rounded-xl shadow-sm p-3 flex items-center justify-between">
-        <div class="font-bold text-gray-600 text-sm">
-          <i class="fa-solid fa-robot"></i> Auto Match หลังจบเกม
+      <div class="bg-white rounded-xl shadow-sm p-3">
+        <div class="font-bold text-gray-700 text-sm mb-2">
+          <i class="fa-solid fa-robot"></i> AutoMatch รายคอร์ท
         </div>
-        <input id="auto-match-toggle" type="checkbox" class="toggle toggle-primary" onchange="setAutoMatch(this.checked)">
+        <div id="auto-courts-list" class="space-y-2"></div>
+        <div class="text-[11px] text-gray-400 mt-2">
+          เปิดเฉพาะคอร์ทที่อยากให้ระบบเติมคู่เอง (คอร์ทที่ปิดไว้ = จัดคู่เอง)
+        </div>
       </div>
     </div>
 
@@ -124,7 +121,7 @@
 
     <div id="staff-controls" class="hidden mb-6">
       <button onclick="matchmake()" class="btn btn-neutral w-full shadow-lg">
-        <i class="fa-solid fa-shuffle"></i> จับคู่อัตโนมัติ
+        <i class="fa-solid fa-shuffle"></i> จับคู่อัตโนมัติ (เติมเฉพาะคอร์ทที่เปิด AutoMatch)
       </button>
     </div>
 
@@ -136,7 +133,36 @@
     </div>
   </div>
 
-  <!-- TAB HISTORY -->
+  <!-- STATS -->
+  <div id="tab-stats" class="p-4 max-w-md mx-auto hidden">
+    <div class="card bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-xl mb-4">
+      <div class="card-body p-5 text-center">
+        <h2 class="text-lg font-bold opacity-80">WIN RATE</h2>
+        <div class="text-5xl font-black my-2" id="st-wr">0%</div>
+        <div class="flex justify-center gap-4 text-sm opacity-90">
+          <span>🏆 Matches: <b id="st-total">0</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="bg-white p-3 rounded-xl shadow-sm border border-orange-100">
+        <div class="text-xs text-gray-400 mb-1">🔥 Win Streak</div>
+        <div class="text-xl font-bold text-gray-700" id="st-streak">0</div>
+      </div>
+      <div class="bg-white p-3 rounded-xl shadow-sm border border-green-100">
+        <div class="text-xs text-gray-400 mb-1">🤝 Best Partner</div>
+        <div class="text-sm font-bold text-green-600 truncate" id="st-partner">-</div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm p-3 border-l-4 border-red-400">
+      <div class="text-xs text-gray-400 mb-1">😈 Nemesis</div>
+      <div class="text-lg font-bold text-red-600" id="st-nemesis">-</div>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
   <div id="tab-history" class="p-4 max-w-md mx-auto hidden">
     <h3 class="font-bold text-gray-500 mb-2">ประวัติการแข่ง</h3>
     <div class="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -147,7 +173,7 @@
     </div>
   </div>
 
-  <!-- TAB RANK -->
+  <!-- RANK -->
   <div id="tab-rank" class="p-4 max-w-md mx-auto hidden">
     <div class="overflow-x-auto bg-white rounded-xl shadow-sm">
       <table class="table table-xs">
@@ -157,30 +183,23 @@
     </div>
   </div>
 
-  <!-- TAB EVENTS -->
+  <!-- EVENTS -->
   <div id="tab-events" class="p-4 max-w-md mx-auto hidden">
     <div class="staff-only hidden mb-4 p-4 bg-white rounded shadow">
       <h3 class="font-bold text-sm mb-2">➕ สร้าง Event (ไม่ใช่ Session)</h3>
       <input id="evt-name" class="input input-bordered input-sm w-full mb-2" placeholder="ชื่อ event">
       <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
       <button onclick="submitNewEvent()" class="btn btn-primary btn-sm w-full">สร้างเลย</button>
-      <div class="text-xs text-gray-400 mt-2">
-        * ถ้าเปิดผ่าน Safari/Chrome แล้ว LIFF มีปัญหา ให้ใส่ <b>?debug=1</b> ท้าย URL เพื่อเข้าโหมดทดสอบ
-      </div>
     </div>
-
     <div id="events-list" class="space-y-4"></div>
   </div>
 
-  <!-- MODALS -->
+  <!-- MANUAL MATCH -->
   <dialog id="modal_manual_match" class="modal">
     <div class="modal-box">
       <h3 class="font-bold text-lg mb-4">🖐 จัดตัวเอง</h3>
 
-      <select id="man-court" class="select select-bordered select-sm w-full mb-2">
-        <option value="1">Court 1</option>
-        <option value="2">Court 2</option>
-      </select>
+      <select id="man-court" class="select select-bordered select-sm w-full mb-2"></select>
 
       <div class="grid grid-cols-2 gap-2 mb-4">
         <div class="bg-red-50 p-2 rounded">
@@ -200,6 +219,7 @@
     </div>
   </dialog>
 
+  <!-- ADMIN -->
   <dialog id="modal_admin" class="modal">
     <div class="modal-box">
       <h3 class="font-bold text-lg mb-4 text-red-600">Admin Panel</h3>
@@ -224,10 +244,11 @@
     </div>
   </dialog>
 
+  <!-- FINISH / CANCEL -->
   <dialog id="modal_finish" class="modal">
     <div class="modal-box text-center">
       <h3 class="font-bold text-lg">จบเกม Court <span id="fin-cid"></span></h3>
-      <div class="text-xs text-gray-400 mt-1">เลือกผู้ชนะ หรือยกเลิกแมตช์ (ไม่คิด MMR)</div>
+      <div class="text-xs text-gray-400 mt-1">เลือกผู้ชนะ หรือยกเลิกแมตช์ (ไม่คิด MMR / ไม่บันทึก)</div>
 
       <div class="flex flex-col gap-2 justify-center mt-4">
         <button onclick="submitRes('A')" class="btn btn-primary w-full">Team A ชนะ</button>
@@ -238,18 +259,7 @@
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
   </dialog>
 
-  <dialog id="modal_edit_mmr" class="modal">
-    <div class="modal-box">
-      <h3 class="font-bold">แก้ไข MMR</h3>
-      <p id="edit-target-name" class="text-sm text-gray-500 mb-2"></p>
-      <input type="number" id="edit-new-mmr" class="input input-bordered w-full" placeholder="คะแนนใหม่">
-      <div class="modal-action">
-        <form method="dialog"><button class="btn btn-ghost">ยกเลิก</button></form>
-        <button class="btn btn-primary" onclick="saveMMR()">บันทึก</button>
-      </div>
-    </div>
-  </dialog>
-
+  <!-- BILLING -->
   <dialog id="modal_billing" class="modal">
     <div class="modal-box w-11/12 max-w-2xl">
       <h3 class="font-bold text-lg mb-2 text-green-600">💰 Billing</h3>
@@ -295,10 +305,13 @@
     let user = null;
     let globalEvents = [];
     let globalAllPlayers = [];
+    let globalSystem = {};
     let selectedCid = 1;
-    let editTargetId = null;
 
-    // ---- toast ----
+    function escapeHtml(s) {
+      return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+    }
+
     function showToast(text, type="info", ms=3500) {
       const root = document.getElementById("toast-root");
       const div = document.createElement("div");
@@ -309,30 +322,9 @@
       setTimeout(() => div.remove(), ms);
     }
 
-    function escapeHtml(s) {
-      return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
-    }
-
-    // ---- Safe LIFF loader ----
-    function loadScript(src) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = src; s.async = true;
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load: " + src));
-        document.head.appendChild(s);
-      });
-    }
-
-    async function ensureLiff() {
-      if (window.liff) return;
-      await loadScript("https://static.line-scdn.net/liff/edge/2/sdk.js");
-      if (!window.liff) throw new Error("LIFF SDK loaded but window.liff is missing");
-    }
-
     function switchTab(t) {
       document.querySelectorAll('.tab').forEach(e => e.classList.remove('tab-active'));
-      ['live','history','rank','events'].forEach(x => {
+      ['live','stats','history','rank','events'].forEach(x => {
         const el = document.getElementById('tab-'+x);
         if (el) el.classList.add('hidden');
       });
@@ -349,19 +341,15 @@
       }
 
       try {
-        await ensureLiff();
         await liff.init({ liffId: LIFF_ID });
-
         if (!liff.isLoggedIn()) {
           liff.login();
           return;
         }
-
         const p = await liff.getProfile();
         await apiLogin(p.userId, p.displayName, p.pictureUrl);
       } catch (e) {
         alert("LIFF Error: " + (e?.message || e));
-        // fallback demo login (กันจอดดำ)
         return apiLogin("U1cf933e3a1559608c50c0456f6583dc9", "Admin Pond", "https://ui-avatars.com/api/?name=A");
       }
     }
@@ -378,31 +366,28 @@
         return;
       }
       user = data;
-      renderUI();
+      renderUserUI();
       await refresh();
       setInterval(refresh, 5000);
     }
 
-    function renderUI() {
+    function renderUserUI() {
       if (!user) return;
+
       document.getElementById('my-img').src = user.pictureUrl || "https://ui-avatars.com/api/?name=User";
       document.getElementById('my-mmr').innerText = user.mmr ?? "...";
       document.getElementById('my-rank-text').innerText = user.rank_title ?? "...";
 
-      const isStaff = (user.role === 'super' || user.role === 'mod');
-      if (isStaff) {
-        document.getElementById('btn-admin').classList.remove('hidden');
-        document.getElementById('btn-bill').classList.remove('hidden');
-        document.getElementById('staff-controls').classList.remove('hidden');
-        document.getElementById('mod-court-control').classList.remove('hidden');
-        document.getElementById('staff-extra').classList.remove('hidden');
-        document.querySelectorAll('.staff-only').forEach(e => e.classList.remove('hidden'));
-      }
-      if (user.role === 'super') {
-        document.getElementById('super-admin-section').classList.remove('hidden');
+      // stats tab
+      if (user.stats) {
+        document.getElementById('st-wr').innerText = (user.stats.win_rate ?? 0) + "%";
+        document.getElementById('st-total').innerText = user.stats.total ?? 0;
+        document.getElementById('st-streak').innerText = user.stats.streak ?? 0;
+        document.getElementById('st-partner').innerText = user.stats.best_partner ?? "-";
+        document.getElementById('st-nemesis').innerText = user.stats.nemesis ?? "-";
       }
 
-      // history render from login payload (my_history)
+      // my history tab
       const hList = document.getElementById('history-list');
       if (hList && user.my_history) {
         hList.innerHTML = user.my_history.length ? user.my_history.map(m => {
@@ -418,6 +403,19 @@
           </tr>`;
         }).join('') : `<tr><td colspan="3" class="text-center p-4 text-gray-400">ยังไม่มีประวัติ</td></tr>`;
       }
+
+      const isStaff = (user.role === 'super' || user.role === 'mod');
+      if (isStaff) {
+        document.getElementById('btn-admin').classList.remove('hidden');
+        document.getElementById('btn-bill').classList.remove('hidden');
+        document.getElementById('staff-controls').classList.remove('hidden');
+        document.getElementById('mod-court-control').classList.remove('hidden');
+        document.getElementById('staff-extra').classList.remove('hidden');
+        document.querySelectorAll('.staff-only').forEach(e => e.classList.remove('hidden'));
+      }
+      if (user.role === 'super') {
+        document.getElementById('super-admin-section').classList.remove('hidden');
+      }
     }
 
     function updateCheckinBtn(status) {
@@ -428,6 +426,7 @@
       if (!btn) return;
 
       if (status === 'active') {
+        btn.disabled = false;
         btn.innerText = "❌ ลงชื่อออก";
         btn.className = "btn btn-outline btn-error w-full";
         badge.innerText = "รอคิว";
@@ -449,7 +448,6 @@
         reqBox.classList.add('hidden');
       }
 
-      // partner request UI
       const reqForm = document.getElementById('req-form');
       const reqActive = document.getElementById('req-active');
       if (status === 'active') {
@@ -465,16 +463,55 @@
       }
     }
 
+    function renderAutoMatchToggles() {
+      const isStaff = (user.role === 'super' || user.role === 'mod');
+      if (!isStaff) return;
+
+      const list = document.getElementById("auto-courts-list");
+      if (!list) return;
+
+      const am = (globalSystem.auto_match_courts || {});
+      const courtIds = Object.keys(globalSystem.auto_match_courts || {}).sort((a,b)=>parseInt(a)-parseInt(b));
+      if (!courtIds.length) {
+        list.innerHTML = `<div class="text-xs text-gray-400">ไม่พบคอร์ท</div>`;
+        return;
+      }
+
+      list.innerHTML = courtIds.map(cid => {
+        const checked = am[cid] ? "checked" : "";
+        return `
+          <div class="flex items-center justify-between bg-gray-50 border rounded-lg px-3 py-2">
+            <div class="font-bold text-sm text-gray-700">Court ${cid}</div>
+            <input type="checkbox" class="toggle toggle-primary" ${checked} onchange="setAutoMatchCourt('${cid}', this.checked)">
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderManualCourtOptions() {
+      const sel = document.getElementById("man-court");
+      if (!sel) return;
+      const total = Object.keys(globalSystem.auto_match_courts || {}).length || 2;
+      sel.innerHTML = "";
+      for (let i=1;i<=total;i++) {
+        const opt = document.createElement("option");
+        opt.value = String(i);
+        opt.innerText = `Court ${i}`;
+        sel.appendChild(opt);
+      }
+    }
+
     async function refresh() {
       if (!user) return;
 
       const res = await fetch('/api/get_dashboard?uid=' + encodeURIComponent(user.id));
       const d = await res.json();
 
+      globalSystem = d.system || {};
       globalEvents = d.events || [];
       globalAllPlayers = d.all_players || [];
 
-      // sync me
+      // update me from dashboard
       const me = globalAllPlayers.find(p => p.id === user.id);
       if (me) {
         user.status = me.status;
@@ -485,13 +522,10 @@
         document.getElementById('my-rank-text').innerText = user.rank_title || "...";
       }
 
-      // auto match checkbox state
-      const auto = !!(d.system && d.system.auto_match);
-      const tgl = document.getElementById("auto-match-toggle");
-      if (tgl) tgl.checked = auto;
+      renderAutoMatchToggles();
+      renderManualCourtOptions();
 
-      // session state
-      const isSessionActive = !!(d.system && d.system.is_session_active);
+      const isSessionActive = !!(globalSystem && globalSystem.is_session_active);
       const sessAlert = document.getElementById('session-alert');
       const btnCheckin = document.getElementById('btn-checkin');
       const reqBox = document.getElementById('partner-req-box');
@@ -509,8 +543,9 @@
         updateCheckinBtn(user.status);
       }
 
-      // courts
       document.getElementById('court-count-display').innerText = Object.keys(d.courts || {}).length;
+
+      // courts render
       const cc = document.getElementById('courts-container');
       cc.innerHTML = '';
 
@@ -535,19 +570,19 @@
                 <span>COURT ${cid}</span>
                 <span class="badge badge-outline">${min} min</span>
               </div>
-
               <div class="flex items-start justify-between text-sm">
                 <div class="flex flex-col gap-1 w-[45%] items-end text-right font-medium">${renderTeam(m.team_a_data)}</div>
                 <div class="font-bold text-red-500 self-center">VS</div>
                 <div class="flex flex-col gap-1 w-[45%] items-start text-left font-medium">${renderTeam(m.team_b_data)}</div>
               </div>
-
               ${canEnd ? `
                 <button onclick="selectedCid=${cid};document.getElementById('modal_finish').showModal();document.getElementById('fin-cid').innerText=${cid}"
                   class="btn btn-xs btn-error text-white w-full mt-2">
                   จบเกม / Cancel
-                </button>
-              ` : ``}
+                </button>` : ``}
+              <div class="text-[11px] text-gray-400 mt-2">
+                AutoMatch: <b>${(globalSystem.auto_match_courts && globalSystem.auto_match_courts[String(cid)]) ? "ON" : "OFF"}</b>
+              </div>
             </div>
           `;
         } else {
@@ -555,7 +590,7 @@
         }
       }
 
-      // admin user list
+      // super admin mod list
       if (user.role === 'super') {
         document.getElementById('admin-user-list').innerHTML = globalAllPlayers.map(p => `
           <tr>
@@ -582,29 +617,25 @@
       }).join('');
 
       // leaderboard
-      document.getElementById('lb-list').innerHTML = (d.leaderboard || []).map((p, i) => {
-        const editBtn = isStaff ? `<button onclick="openEditMMR('${p.id}')" class="btn btn-xs btn-ghost text-gray-400"><i class="fa-solid fa-pen"></i></button>` : '';
-        return `
-          <tr>
-            <td class="font-bold text-gray-500">${i + 1}</td>
-            <td>
+      document.getElementById('lb-list').innerHTML = (d.leaderboard || []).map((p, i) => `
+        <tr>
+          <td class="font-bold text-gray-500">${i + 1}</td>
+          <td>
+            <div class="flex items-center gap-2">
+              <div class="avatar"><div class="w-6 rounded-full"><img src="${p.pictureUrl}"></div></div>
               <div class="flex flex-col">
-                <div class="flex items-center gap-2">
-                  <div class="avatar"><div class="w-6 rounded-full"><img src="${p.pictureUrl}"></div></div>
-                  <span class="text-sm font-bold">${p.nickname}</span>
-                </div>
-                <span class="text-[10px] text-gray-400 ml-8">${p.rank_title}</span>
+                <span class="text-sm font-bold">${p.nickname}</span>
+                <span class="text-[10px] text-gray-400">${p.rank_title}</span>
               </div>
-            </td>
-            <td class="text-right">
-              <div class="font-mono font-bold text-indigo-600">${p.mmr}</div>
-              ${editBtn}
-            </td>
-          </tr>
-        `;
-      }).join('');
+            </div>
+          </td>
+          <td class="text-right">
+            <div class="font-mono font-bold text-indigo-600">${p.mmr}</div>
+          </td>
+        </tr>
+      `).join('');
 
-      // partner select options
+      // partner select (active only)
       const pSelect = document.getElementById('partner-select');
       if (pSelect && document.activeElement !== pSelect) {
         const cur = pSelect.value;
@@ -620,7 +651,7 @@
         if (cur) pSelect.value = cur;
       }
 
-      // manual selects
+      // manual selects (active only)
       document.querySelectorAll('.player-select').forEach(s => {
         if (document.activeElement !== s && s.children.length <= 1) {
           s.innerHTML = '<option value="">-- เลือก --</option>';
@@ -633,13 +664,10 @@
         }
       });
 
-      // incoming partner requests
       renderIncomingRequests(d.incoming_partner_requests || []);
 
-      // notifications unread
       if (d.notifications_unread && d.notifications_unread.length) {
         d.notifications_unread.forEach(n => showToast(n.text, "success", 4500));
-        // ack
         const ids = d.notifications_unread.map(x => x.id);
         fetch('/api/notifications/ack', {
           method:'POST',
@@ -648,15 +676,14 @@
         });
       }
 
-      // events
       renderEvents();
     }
 
     function renderIncomingRequests(list) {
       const box = document.getElementById('incoming-box');
       const el = document.getElementById('incoming-list');
-
       if (!box || !el) return;
+
       if (!list.length || user.status !== 'active') {
         box.classList.add('hidden');
         el.innerHTML = '';
@@ -705,9 +732,7 @@
                 </div>
                 <div class="text-xs text-gray-500">${formatDate(e.datetime)}</div>
                 <div class="text-xs text-gray-500 mt-1">👥 ${joinedCount} คน</div>
-                ${isSession ? `<div class="text-[11px] text-gray-400 mt-1">* คนเข้าร่วม Session จะมาจากการ Check-in</div>` : ``}
               </div>
-
               ${isStaff && !isSession ? `<button class="btn btn-xs btn-ghost text-red-500" onclick="deleteEvent('${e.id}')">ลบ</button>` : ``}
             </div>
 
@@ -779,13 +804,19 @@
     }
 
     async function matchmake() {
-      const r = await (await fetch('/api/matchmake', {method:'POST'})).json();
+      const res = await fetch('/api/matchmake', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId: user.id})
+      });
+      const r = await res.json();
+
+      if (r.error) return showToast(r.error, "error");
+
       if (r.status !== 'matched') {
-        if (r.status === 'full') showToast('สนามเต็ม', "error");
-        else if (r.status === 'session_off') showToast('ยังไม่เริ่มก๊วน', "error");
-        else showToast('คนไม่พอ', "error");
+        showToast('คนไม่พอ หรือไม่มีคอร์ทที่เปิด AutoMatch ว่าง', "info");
       } else {
-        showToast("จัดคู่แล้ว!", "success");
+        showToast(`จัดคู่แล้ว ${r.matched_count || 1} สนาม ✅`, "success");
         refresh();
       }
     }
@@ -797,14 +828,17 @@
         body: JSON.stringify({courtId:selectedCid, winner:w, userId:user.id})
       });
       const r = await res.json();
-      if (r.error) {
-        showToast(r.error, "error");
-        return;
-      }
+      if (r.error) return showToast(r.error, "error");
+
       document.getElementById('modal_finish').close();
-      if (r.auto && r.auto.status === "matched") {
-        showToast("Auto Match ทำงาน: จับคู่เกมถัดไปแล้ว", "success");
+
+      if (r.auto_matches && r.auto_matches.length) {
+        showToast(`AutoMatch เติมแล้ว ${r.auto_matches.length} สนาม ✅`, "success", 4500);
+      } else {
+        showToast(`บันทึกผลแล้ว ✅`, "success");
       }
+
+      await apiLogin(user.id, user.nickname, user.pictureUrl);
       refresh();
     }
 
@@ -815,13 +849,16 @@
         body: JSON.stringify({courtId:selectedCid, userId:user.id})
       });
       const r = await res.json();
-      if (r.error) {
-        showToast(r.error, "error");
-        return;
-      }
+      if (r.error) return showToast(r.error, "error");
+
       document.getElementById('modal_finish').close();
-      if (r.rematch && r.rematch.status === "matched") showToast("Cancel แล้วจับคู่ใหม่ให้ทันที ✅", "success");
-      else showToast("Cancel แล้ว (รอคนให้ครบเพื่อจับคู่ใหม่)", "info");
+
+      if (r.auto_matches && r.auto_matches.length) {
+        showToast(`Cancel แล้ว AutoMatch เติม ${r.auto_matches.length} สนาม ✅`, "success", 4500);
+      } else {
+        showToast("Cancel แล้ว (ไม่มีคอร์ท AutoMatch ว่าง หรือคนไม่พอ)", "info");
+      }
+
       refresh();
     }
 
@@ -864,11 +901,25 @@
 
     async function changeCourtCount(delta) {
       const current = parseInt(document.getElementById('court-count-display').innerText || "2");
-      await fetch('/api/admin/update_courts', {
+      const res = await fetch('/api/admin/update_courts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({userId:user.id, count: current + delta})
       });
+      const r = await res.json();
+      if (r.error) showToast(r.error, "error");
+      refresh();
+    }
+
+    async function setAutoMatchCourt(courtId, enabled) {
+      const res = await fetch('/api/admin/set_auto_match_court', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({userId:user.id, courtId, enabled})
+      });
+      const r = await res.json();
+      if (r.error) showToast(r.error, "error");
+      else showToast(`Court ${courtId} AutoMatch = ${enabled ? "ON" : "OFF"}`, "success");
       refresh();
     }
 
@@ -892,18 +943,6 @@
       location.reload();
     }
 
-    async function setAutoMatch(enabled) {
-      const res = await fetch('/api/admin/set_auto_match', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({userId:user.id, enabled})
-      });
-      const r = await res.json();
-      if (r.error) showToast(r.error, "error");
-      else showToast(`Auto Match: ${r.auto_match ? 'ON' : 'OFF'}`, "success");
-    }
-
-    // ---- Events ----
     async function submitNewEvent() {
       const n = document.getElementById('evt-name').value.trim();
       const t = document.getElementById('evt-time').value;
@@ -948,31 +987,7 @@
       refresh();
     }
 
-    // ---- Edit MMR ----
-    function openEditMMR(uid) {
-      const player = globalAllPlayers.find(p => p.id === uid);
-      if (!player) return;
-      editTargetId = uid;
-      document.getElementById('edit-target-name').innerText = `แก้ไขคะแนนของ: ${player.nickname}`;
-      document.getElementById('edit-new-mmr').value = player.mmr || 1000;
-      document.getElementById('modal_edit_mmr').showModal();
-    }
-
-    async function saveMMR() {
-      const v = document.getElementById('edit-new-mmr').value;
-      if(!v) return;
-      const res = await fetch('/api/admin/set_mmr', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({userId:user.id, targetUserId: editTargetId, newMmr: v})
-      });
-      const r = await res.json();
-      if (r.error) showToast(r.error, "error");
-      document.getElementById('modal_edit_mmr').close();
-      refresh();
-    }
-
-    // ---- Billing (Session only) ----
+    // ---- Billing ----
     async function openBillingModal() {
       await refresh();
       const select = document.getElementById('bill-event-select');

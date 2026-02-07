@@ -18,7 +18,8 @@ DEFAULT_DB = {
         "total_courts": 2,
         "is_session_active": False,
         "current_event_id": None,
-        "auto_match": False
+        # AutoMatch รายคอร์ท: {"1": True, "2": True, ...}
+        "auto_match_courts": {}
     },
     "mod_ids": [],
     "players": {},
@@ -26,7 +27,7 @@ DEFAULT_DB = {
     "match_history": [],
     "billing_history": [],
     "courts_state": {},            # { "1": None or matchObj }
-    "recent_avoids": [],           # history-based constraints (finish/cancel)
+    "recent_avoids": [],           # constraints after finish/cancel
     "notifications": {}            # { uid: [ {id,ts,text,payload,read} ] }
 }
 
@@ -73,7 +74,6 @@ def get_db() -> dict:
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # merge defaults (safe)
         data = deep_merge_defaults(data, json.loads(json.dumps(DEFAULT_DB)))
         return data
     except Exception as e:
@@ -93,15 +93,23 @@ def is_staff(uid: str, db: dict) -> bool:
     return uid == SUPER_ADMIN_ID or uid in db.get("mod_ids", [])
 
 def refresh_courts(db: dict):
-    total = max(1, min(6, safe_int(db["system_settings"].get("total_courts", 2), 2)))
+    total = max(1, min(10, safe_int(db["system_settings"].get("total_courts", 2), 2)))
+
     if "courts_state" not in db or not isinstance(db["courts_state"], dict):
         db["courts_state"] = {}
+    if "auto_match_courts" not in db["system_settings"] or not isinstance(db["system_settings"]["auto_match_courts"], dict):
+        db["system_settings"]["auto_match_courts"] = {}
 
+    # เพิ่ม court ให้ครบ
     for i in range(1, total + 1):
         k = str(i)
         if k not in db["courts_state"]:
             db["courts_state"][k] = None
+        # default: เปิด automatch ทุกคอร์ท (เพื่อให้พฤติกรรมเดิมยังเหมือนเดิม)
+        if k not in db["system_settings"]["auto_match_courts"]:
+            db["system_settings"]["auto_match_courts"][k] = True
 
+    # ลบ court เกิน
     for k in list(db["courts_state"].keys()):
         try:
             if int(k) > total:
@@ -109,8 +117,25 @@ def refresh_courts(db: dict):
         except:
             pass
 
-def get_rank_title(mmr):
-    mmr = safe_int(mmr, 1000)
+    # ลบ auto_match_courts เกิน
+    for k in list(db["system_settings"]["auto_match_courts"].keys()):
+        try:
+            if int(k) > total:
+                del db["system_settings"]["auto_match_courts"][k]
+        except:
+            pass
+
+# ---------------- RANK / CALIBRATION ----------------
+def is_calibrating(p: dict) -> bool:
+    return safe_int(p.get("calib_played", 0), 0) < 10
+
+def rank_title_from_mmr(p: dict):
+    mmr = safe_int(p.get("mmr", 1000), 1000)
+
+    cp = safe_int(p.get("calib_played", 0), 0)
+    if cp < 10:
+        return f"UNRANKED 🧪 {cp}/10"
+
     if mmr <= 800:
         return "NOOB DOG 🐶"
     elif mmr <= 1200:
@@ -122,7 +147,44 @@ def get_rank_title(mmr):
     else:
         return "โปรเพรเย๋อ 👽"
 
-# ---------------- SESSION STATS ----------------
+def effective_mmr_for_matchmaking(pid: str, players_map: dict) -> int:
+    """
+    ใช้ตอนจับคู่เพื่อช่วย calibrate ให้เร็วขึ้น:
+    - ถ้า calibrating: boost ตาม winrate ช่วง calib + win streak + uncertainty(ยิ่งเกมน้อย boost ยิ่งเยอะ)
+    """
+    p = players_map.get(pid, {})
+    mmr = safe_int(p.get("mmr", 1000), 1000)
+
+    cp = safe_int(p.get("calib_played", 0), 0)
+    if cp >= 10:
+        return mmr
+
+    wins = safe_int(p.get("calib_wins", 0), 0)
+    streak = safe_int(p.get("calib_streak", 0), 0)
+
+    games = max(1, cp)
+    wr = wins / games if games > 0 else 0.5
+
+    perf_boost = int((wr - 0.5) * 600)          # -300..+300
+    streak_boost = min(700, 160 * streak)       # win streak ดันให้เจอคนแรงขึ้น
+    uncertainty = (10 - cp) * 15                # เกมน้อย ยังไม่รู้ฝีมือ -> ขยับเร็ว
+
+    return mmr + perf_boost + streak_boost + uncertainty
+
+def calib_multiplier(p: dict) -> float:
+    """
+    ใช้ตอนปรับ MMR หลังเกม เพื่อให้ calibrate เร็วขึ้น แต่ไม่ทำให้ทีมเสียสมดุล:
+    จะเอา multiplier ไป normalize ภายในทีม
+    """
+    cp = safe_int(p.get("calib_played", 0), 0)
+    if cp >= 10:
+        return 1.0
+
+    streak = safe_int(p.get("calib_streak", 0), 0)
+    m = 1.6 + 0.1 * min(5, streak)   # 1.6..2.1
+    return min(2.2, m)
+
+# ---------------- SESSION STATS (สำหรับ billing/ความแฟร์) ----------------
 def ensure_event_stats(event: dict):
     if "stats" not in event or not isinstance(event["stats"], dict):
         event["stats"] = {}
@@ -171,7 +233,6 @@ def push_notification(db: dict, uid: str, text: str, payload=None):
         "payload": payload or {},
         "read": False
     })
-    # keep last 30
     db["notifications"][uid] = db["notifications"][uid][:30]
     return nid
 
@@ -208,7 +269,7 @@ def prune_avoids(db: dict):
         ts = safe_float(a.get("ts", now), now)
         if now - ts <= ttl:
             kept.append(a)
-    db["recent_avoids"] = kept[-80:]
+    db["recent_avoids"] = kept[-120:]
 
 def add_avoid(db: dict, kind: str, team_a_ids, team_b_ids, ttl: int):
     prune_avoids(db)
@@ -222,7 +283,7 @@ def add_avoid(db: dict, kind: str, team_a_ids, team_b_ids, ttl: int):
         "canonical": [list(can[0]), list(can[1])],
         "teammate_pairs": [list(p) for p in sorted(list(pairs))]
     })
-    db["recent_avoids"] = db["recent_avoids"][-80:]
+    db["recent_avoids"] = db["recent_avoids"][-120:]
 
 def get_avoid_info(db: dict, team_a_ids, team_b_ids):
     prune_avoids(db)
@@ -234,7 +295,6 @@ def get_avoid_info(db: dict, team_a_ids, team_b_ids):
     return False, ""
 
 def teammate_pair_avoided(db: dict, pair_tuple):
-    # pair_tuple is (uid1, uid2) sorted
     prune_avoids(db)
     pair_list = list(pair_tuple)
     for a in db.get("recent_avoids", []):
@@ -242,7 +302,7 @@ def teammate_pair_avoided(db: dict, pair_tuple):
             return True, a.get("kind", "")
     return False, ""
 
-# ---------------- MMR (Elo team) ----------------
+# ---------------- MMR (Team Elo) ----------------
 def expected_score(rA: float, rB: float) -> float:
     return 1.0 / (1.0 + (10 ** ((rB - rA) / 400.0)))
 
@@ -257,6 +317,7 @@ def mmr_k_factor(avg_rating: int) -> int:
         return 32
 
 def compute_team_deltas(team_a_ids, team_b_ids, winner_team, players_map):
+    # ใช้ MMR จริงในการคำนวณผล (ไม่ใช้ effective)
     ra = sum(safe_int(players_map[pid].get("mmr", 1000), 1000) for pid in team_a_ids) / max(1, len(team_a_ids))
     rb = sum(safe_int(players_map[pid].get("mmr", 1000), 1000) for pid in team_b_ids) / max(1, len(team_b_ids))
 
@@ -264,53 +325,120 @@ def compute_team_deltas(team_a_ids, team_b_ids, winner_team, players_map):
     score_a = 1.0 if winner_team == "A" else 0.0
 
     avg_all = int((ra + rb) / 2)
-    k = mmr_k_factor(avg_all)
+    k_base = mmr_k_factor(avg_all)
 
-    delta_a = int(round(k * (score_a - exp_a)))
-    if delta_a == 0:
-        delta_a = 1 if winner_team == "A" else -1
-    delta_b = -delta_a
+    delta_a_base = k_base * (score_a - exp_a)
+    if abs(delta_a_base) < 1:
+        delta_a_base = 1.0 if winner_team == "A" else -1.0
+    delta_b_base = -delta_a_base
+
+    # Calibration multiplier: normalize ภายในทีมให้ทีมยังคง delta เฉลี่ยเท่าเดิม
+    wa = [calib_multiplier(players_map.get(pid, {})) for pid in team_a_ids]
+    wb = [calib_multiplier(players_map.get(pid, {})) for pid in team_b_ids]
+    avg_wa = sum(wa) / max(1, len(wa))
+    avg_wb = sum(wb) / max(1, len(wb))
 
     deltas = {}
-    for pid in team_a_ids:
-        deltas[pid] = delta_a
-    for pid in team_b_ids:
-        deltas[pid] = delta_b
+    for i, pid in enumerate(team_a_ids):
+        w = wa[i] / avg_wa if avg_wa > 0 else 1.0
+        deltas[pid] = int(round(delta_a_base * w))
+
+    for i, pid in enumerate(team_b_ids):
+        w = wb[i] / avg_wb if avg_wb > 0 else 1.0
+        deltas[pid] = int(round(delta_b_base * w))
+
+    # กันเคส delta เป็น 0
+    for pid in list(deltas.keys()):
+        if deltas[pid] == 0:
+            deltas[pid] = 1 if (winner_team == "A" and pid in team_a_ids) or (winner_team == "B" and pid in team_b_ids) else -1
 
     meta = {
         "team_a_avg": ra,
         "team_b_avg": rb,
-        "k": k,
+        "k_base": k_base,
         "exp_a": exp_a,
-        "delta_a": delta_a
+        "delta_a_base": float(delta_a_base),
+        "calibration_weights_a": wa,
+        "calibration_weights_b": wb
     }
     return deltas, meta
+
+# ---------------- SMART STATS (สำหรับคนตีแบด) ----------------
+def calculate_smart_stats(uid: str, history: list):
+    my_matches = [m for m in history if uid in m.get("team_a_ids", []) or uid in m.get("team_b_ids", [])]
+    total = len(my_matches)
+    if total == 0:
+        return {"win_rate": 0, "total": 0, "streak": 0, "best_partner": "-", "nemesis": "-"}
+
+    wins = 0
+    streak = 0
+    best_streak = 0
+
+    partner_win = {}
+    nemesis_loss = {}
+
+    for m in reversed(my_matches):
+        is_team_a = uid in m.get("team_a_ids", [])
+        my_team = "A" if is_team_a else "B"
+        is_win = (m.get("winner_team") == my_team)
+
+        if is_win:
+            wins += 1
+            streak += 1
+        else:
+            streak = 0
+        best_streak = max(best_streak, streak)
+
+        # teammate
+        if is_team_a:
+            mate = [x for x in m.get("team_a_ids", []) if x != uid]
+            opp = m.get("team_b_ids", [])
+        else:
+            mate = [x for x in m.get("team_b_ids", []) if x != uid]
+            opp = m.get("team_a_ids", [])
+
+        if mate:
+            mate_id = mate[0]
+            if is_win:
+                partner_win[mate_id] = partner_win.get(mate_id, 0) + 1
+
+        if not is_win:
+            for o in opp:
+                nemesis_loss[o] = nemesis_loss.get(o, 0) + 1
+
+    best_partner_id = max(partner_win.items(), key=lambda x: x[1])[0] if partner_win else None
+    nemesis_id = max(nemesis_loss.items(), key=lambda x: x[1])[0] if nemesis_loss else None
+
+    return {
+        "win_rate": int((wins / total) * 100),
+        "total": total,
+        "streak": best_streak,
+        "best_partner": best_partner_id or "-",
+        "nemesis": nemesis_id or "-"
+    }
 
 # ---------------- MATCHMAKING ----------------
 def player_queue_since(p):
     qs = p.get("queue_since")
     if isinstance(qs, (int, float)):
         return float(qs)
-    # fallback
     return safe_float(p.get("last_active", 0), 0.0)
 
 def build_groups(active_players: list, players_map: dict, current_event: dict):
-    """
-    group singles + requested pairs (pair must stay same team)
-    sort priority: waiting (oldest), matches_played (less first), seconds_played (less first)
-    """
     active_ids = {p["id"] for p in active_players}
     processed = set()
     groups = []
 
-    active_sorted = sorted(
-        active_players,
-        key=lambda p: (
+    # priority: wait time first, then calib progress (น้อยก่อน), then session equalization
+    def sort_key(p):
+        return (
             player_queue_since(p),
+            safe_int(p.get("calib_played", 0), 0),
             matches_played_in_event(current_event, p["id"]),
             seconds_played_in_event(current_event, p["id"])
         )
-    )
+
+    active_sorted = sorted(active_players, key=sort_key)
 
     for p in active_sorted:
         pid = p["id"]
@@ -335,20 +463,20 @@ def build_groups(active_players: list, players_map: dict, current_event: dict):
     groups.sort(key=lambda g: (g["wait_since"], g["matches_played"], g["seconds_played"]))
     return groups
 
-def sum_mmr(players_map, ids):
-    return sum(safe_int(players_map[i].get("mmr", 1000), 1000) for i in ids)
+def sum_effective(players_map, ids):
+    return sum(effective_mmr_for_matchmaking(i, players_map) for i in ids)
 
 def split_metrics(players_map, team_a_ids, team_b_ids):
-    sa = sum_mmr(players_map, team_a_ids)
-    sb = sum_mmr(players_map, team_b_ids)
+    # ใช้ effective mmr เพื่อช่วย calibrate/matchmaking
+    sa = sum_effective(players_map, team_a_ids)
+    sb = sum_effective(players_map, team_b_ids)
     total_diff = abs(sa - sb)
 
-    # pair-skill fairness: avoid huge carry (intra-team mmr gap)
     def intra_gap(team):
         if len(team) != 2:
             return 0
         a, b = team[0], team[1]
-        return abs(safe_int(players_map[a].get("mmr", 1000), 1000) - safe_int(players_map[b].get("mmr", 1000), 1000))
+        return abs(effective_mmr_for_matchmaking(a, players_map) - effective_mmr_for_matchmaking(b, players_map))
 
     gap_a = intra_gap(team_a_ids)
     gap_b = intra_gap(team_b_ids)
@@ -374,47 +502,30 @@ def requested_pair_set(groups_in_selected):
     return s
 
 def compute_repeat_penalty(db, team_a_ids, team_b_ids, requested_pairs: set, strict_cancel_rules: bool):
-    """
-    repeat_penalty counts teammate pairs that appeared recently (finish/cancel).
-    strict_cancel_rules:
-      - if match was canceled recently, strongly avoid SAME teammate pairs again (unless requested)
-      - also avoid EXACT same match (teams) if possible
-    """
     penalty = 0
 
-    # exact match avoid
     exact, kind = get_avoid_info(db, team_a_ids, team_b_ids)
     if exact and strict_cancel_rules and kind == "cancel":
-        # hard reject handled outside (return special)
         pass
     elif exact:
         penalty += 3
 
-    # teammate pair avoid
     for pair in teammate_pairs(team_a_ids) + teammate_pairs(team_b_ids):
         avoided, ak = teammate_pair_avoided(db, pair)
         if avoided:
             if strict_cancel_rules and ak == "cancel" and pair not in requested_pairs:
-                # hard reject handled outside (return special)
                 pass
             penalty += 2 if ak == "cancel" else 1
 
     return penalty
 
 def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_mode: bool):
-    """
-    Choose best split with constraints:
-    - requested pairs must stay together
-    - prefer: (max_gap, total_diff) rather than sum-only
-    - avoid canceled teammate pairs if possible
-    """
     ids = list(ids4)
     req_pairs = requested_pair_set(groups_in_selected)
 
     best = None
     best_score = None
 
-    # two-pass: strict -> relaxed (allow canceled repeats)
     for pass_idx in [0, 1]:
         strict_cancel = (pass_idx == 0) if strict_mode else False
 
@@ -422,7 +533,7 @@ def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_m
             team_a = set(comb)
             team_b = set(ids) - team_a
 
-            # keep requested pairs same team
+            # enforce requested pair must be on same team
             ok = True
             for a, b in req_pairs:
                 in_a = (a in team_a and b in team_a)
@@ -435,18 +546,15 @@ def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_m
 
             team_a_list = list(team_a)
             team_b_list = list(team_b)
-
-            # normalize size 2-2
             if len(team_a_list) != 2 or len(team_b_list) != 2:
                 continue
 
-            # hard reject canceled exact/teammate pairs in strict_cancel pass (unless requested)
+            # strict cancel: avoid exact same teams or same teammate pairs (unless request pair)
             if strict_cancel:
                 exact, kind = get_avoid_info(db, team_a_list, team_b_list)
                 if exact and kind == "cancel":
                     continue
 
-                # teammate pairs
                 for pair in teammate_pairs(team_a_list) + teammate_pairs(team_b_list):
                     avoided, ak = teammate_pair_avoided(db, pair)
                     if avoided and ak == "cancel" and pair not in req_pairs:
@@ -458,8 +566,7 @@ def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_m
             m = split_metrics(players_map, team_a_list, team_b_list)
             repeat_pen = compute_repeat_penalty(db, team_a_list, team_b_list, req_pairs, strict_cancel)
 
-            # IMPORTANT: for badminton, prioritize pair-balance (max_gap) BEFORE team sum diff
-            # score order: repeat_pen -> max_gap -> total_diff -> gap_sum
+            # badminton: prioritize pair fairness (avoid carry) before sum diff
             score = (repeat_pen, m["max_gap"], m["total_diff"], m["gap_sum"])
 
             if best is None or score < best_score:
@@ -469,32 +576,24 @@ def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_m
         if best is not None:
             return best[0], best[1], best_score
 
-    # fallback (shouldn't happen)
-    ids_sorted = sorted(ids, key=lambda x: safe_int(players_map[x].get("mmr", 1000), 1000), reverse=True)
+    # fallback
+    ids_sorted = sorted(ids, key=lambda x: effective_mmr_for_matchmaking(x, players_map), reverse=True)
     team_a = [ids_sorted[0], ids_sorted[-1]]
     team_b = [ids_sorted[1], ids_sorted[2]]
     m = split_metrics(players_map, team_a, team_b)
     return team_a, team_b, (999, m["max_gap"], m["total_diff"], m["gap_sum"])
 
 def choose_match(groups, players_map, current_event, db):
-    """
-    Priority 1: waiting time (must include oldest group)
-    Priority 2: fairness:
-      - avoid canceled teammate pairs when possible
-      - minimize carry-heavy pairing (max_gap) first, then sum diff
-    """
     if not groups:
         return None
 
-    # focus first N groups for search
     N = min(12, len(groups))
     cand_groups = groups[:N]
-    must_idx = 0
+    must_idx = 0  # oldest wait must be included
 
     best_pick = None
     best_score = None
 
-    # choose subset of groups indices whose total members = 4, includes must_idx
     indices = list(range(len(cand_groups)))
     for r in range(1, len(indices) + 1):
         for idxs in combinations(indices, r):
@@ -507,14 +606,14 @@ def choose_match(groups, players_map, current_event, db):
             if len(members) != 4:
                 continue
 
-            max_idx = max(idxs)  # how deep we had to go beyond oldest (smaller is better)
+            max_idx = max(idxs)
             groups_in_selected = [cand_groups[i] for i in idxs]
 
             team_a_ids, team_b_ids, split_score = best_team_split_for_four(
                 players_map, members, groups_in_selected, db, strict_mode=True
             )
 
-            # overall score: (max_idx, split_score...)
+            # first priority: include oldest group earliest; then fairness metrics
             score = (max_idx,) + split_score
 
             if best_pick is None or score < best_score:
@@ -524,7 +623,7 @@ def choose_match(groups, players_map, current_event, db):
     if best_pick:
         return best_pick[0], best_pick[1]
 
-    # fallback: take first 4 by waiting and best split (relaxed)
+    # fallback: first 4 members by queue
     members = []
     used_groups = []
     for g in groups:
@@ -540,29 +639,32 @@ def choose_match(groups, players_map, current_event, db):
     team_a_ids, team_b_ids, _ = best_team_split_for_four(players_map, members, used_groups, db, strict_mode=False)
     return team_a_ids, team_b_ids
 
-def find_free_court(db, preferred=None):
+def enabled_courts(db: dict):
     refresh_courts(db)
+    am = db["system_settings"].get("auto_match_courts", {})
+    return [cid for cid in db["courts_state"].keys() if am.get(cid, False)]
+
+def find_free_court(db, preferred=None, only_enabled=False):
+    refresh_courts(db)
+    allowed = set(enabled_courts(db)) if only_enabled else set(db["courts_state"].keys())
+
     if preferred is not None:
         cid = str(preferred)
-        if cid in db["courts_state"] and db["courts_state"][cid] is None:
+        if cid in allowed and cid in db["courts_state"] and db["courts_state"][cid] is None:
             return cid
-    for cid, m in db["courts_state"].items():
-        if m is None:
+
+    for cid in sorted(list(allowed), key=lambda x: safe_int(x, 999)):
+        if db["courts_state"].get(cid) is None:
             return cid
     return None
 
-def matchmake_internal(db, preferred_court=None, manual=False, manual_players=None, created_by=None):
-    """
-    Returns dict:
-      {status: matched|waiting|full|session_off|no_session_event, courtId, matchId}
-    This modifies db but DOES NOT save_db.
-    """
+def matchmake_internal(db, preferred_court=None, manual=False, manual_players=None, created_by=None, only_enabled=False):
     refresh_courts(db)
 
     if not db["system_settings"].get("is_session_active"):
         return {"status": "session_off"}
 
-    free_court = find_free_court(db, preferred_court)
+    free_court = find_free_court(db, preferred_court, only_enabled=only_enabled)
     if not free_court:
         return {"status": "full"}
 
@@ -590,7 +692,6 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
             return {"status": "waiting"}
         team_a_ids, team_b_ids = pick
 
-    # Snapshot queue + partner to restore on cancel
     queue_snapshot = {pid: db["players"][pid].get("queue_since") for pid in (team_a_ids + team_b_ids)}
     partner_snapshot = {pid: db["players"][pid].get("partner_req") for pid in (team_a_ids + team_b_ids)}
 
@@ -608,7 +709,6 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
     }
     db["courts_state"][free_court] = match_obj
 
-    # Set players playing + clear partner_req (one-match request)
     for pid in team_a_ids + team_b_ids:
         p = db["players"][pid]
         p["status"] = "playing"
@@ -616,7 +716,6 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
         p["partner_req"] = None
         add_participant(current_event, pid)
 
-    # In-app notification
     def name(pid):
         return db["players"].get(pid, {}).get("nickname", pid)
 
@@ -631,6 +730,38 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
 
     return {"status": "matched", "courtId": free_court, "matchId": match_id}
 
+def fill_enabled_courts(db, prefer_court=None):
+    """
+    เติมเฉพาะคอร์ทที่เปิด automatch (รายคอร์ท)
+    """
+    results = []
+    refresh_courts(db)
+
+    enabled = set(enabled_courts(db))
+
+    # try prefer court first (if enabled)
+    if prefer_court is not None:
+        pc = str(prefer_court)
+        if pc in enabled and db["courts_state"].get(pc) is None:
+            r = matchmake_internal(db, preferred_court=pc, only_enabled=True)
+            if r.get("status") == "matched":
+                results.append(r)
+
+    # fill remaining enabled free courts
+    max_iter = len(enabled) * 3
+    for _ in range(max_iter):
+        free = find_free_court(db, preferred=None, only_enabled=True)
+        if not free:
+            break
+        r = matchmake_internal(db, preferred_court=free, only_enabled=True)
+        if r.get("status") == "matched":
+            results.append(r)
+            continue
+        else:
+            break
+
+    return results
+
 # ---------------- ROUTES ----------------
 @app.route("/")
 def index():
@@ -640,6 +771,8 @@ def index():
 def login():
     try:
         db = get_db()
+        refresh_courts(db)
+
         d = request.json or {}
         uid = d.get("userId")
         if not uid:
@@ -651,22 +784,40 @@ def login():
                 "nickname": d.get("displayName", "User"),
                 "pictureUrl": d.get("pictureUrl", ""),
                 "mmr": 1000,
-                "status": "offline",        # offline | active | playing
-                "queue_since": None,        # when checked-in
+                "status": "offline",
+                "queue_since": None,
                 "last_active": now_ts(),
                 "last_seen": now_ts(),
-                "partner_req": None
+                "partner_req": None,
+                # calibration fields
+                "games_played": 0,
+                "calib_played": 0,
+                "calib_wins": 0,
+                "calib_streak": 0
             }
         else:
-            db["players"][uid]["nickname"] = d.get("displayName", db["players"][uid].get("nickname", "User"))
-            db["players"][uid]["pictureUrl"] = d.get("pictureUrl", db["players"][uid].get("pictureUrl", ""))
-            db["players"][uid]["last_seen"] = now_ts()
+            p = db["players"][uid]
+            p["nickname"] = d.get("displayName", p.get("nickname", "User"))
+            p["pictureUrl"] = d.get("pictureUrl", p.get("pictureUrl", ""))
+            p["last_seen"] = now_ts()
+            # ensure calibration defaults
+            p.setdefault("games_played", 0)
+            p.setdefault("calib_played", 0)
+            p.setdefault("calib_wins", 0)
+            p.setdefault("calib_streak", 0)
 
         p = db["players"][uid]
         p["role"] = "super" if uid == SUPER_ADMIN_ID else ("mod" if uid in db["mod_ids"] else "user")
-        p["rank_title"] = get_rank_title(p.get("mmr", 1000))
+        p["rank_title"] = rank_title_from_mmr(p)
 
-        # my history
+        # smart stats + map names for partner/nemesis
+        stats = calculate_smart_stats(uid, db.get("match_history", []))
+        if stats["best_partner"] != "-" and stats["best_partner"] in db["players"]:
+            stats["best_partner"] = db["players"][stats["best_partner"]].get("nickname", stats["best_partner"])
+        if stats["nemesis"] != "-" and stats["nemesis"] in db["players"]:
+            stats["nemesis"] = db["players"][stats["nemesis"]].get("nickname", stats["nemesis"])
+        p["stats"] = stats
+
         my_hist = []
         for m in db.get("match_history", []):
             if uid in m.get("team_a_ids", []) or uid in m.get("team_b_ids", []):
@@ -687,9 +838,7 @@ def get_dashboard():
 
         system = db.get("system_settings", {})
         current_eid = system.get("current_event_id")
-        current_event = db["events"].get(current_eid) if current_eid else None
 
-        # courts output (attach player info)
         courts_out = {}
         for cid, match in db["courts_state"].items():
             if match:
@@ -709,20 +858,21 @@ def get_dashboard():
             else:
                 courts_out[cid] = None
 
-        # players list
         players_list = []
         for p in db["players"].values():
             p["mmr"] = safe_int(p.get("mmr", 1000), 1000)
-            p["rank_title"] = get_rank_title(p["mmr"])
+            p.setdefault("games_played", 0)
+            p.setdefault("calib_played", 0)
+            p.setdefault("calib_wins", 0)
+            p.setdefault("calib_streak", 0)
+            p["rank_title"] = rank_title_from_mmr(p)
             players_list.append(p)
 
-        # queue (active + playing)
         queue = [p for p in players_list if p.get("status") in ("active", "playing")]
-        queue.sort(key=lambda x: (player_queue_since(x), safe_int(x.get("mmr", 1000), 1000)))
+        queue.sort(key=lambda x: (player_queue_since(x), safe_int(x.get("calib_played", 0), 0), safe_int(x.get("mmr", 1000), 1000)))
 
         leaderboard = sorted(players_list, key=lambda x: x.get("mmr", 1000), reverse=True)
 
-        # events list
         event_list = []
         for eid, e in db["events"].items():
             joined = []
@@ -749,7 +899,6 @@ def get_dashboard():
 
         event_list.sort(key=lambda x: x["sort_key"], reverse=True)
 
-        # minimal players for frontend
         all_players = []
         for p in players_list:
             all_players.append({
@@ -761,10 +910,12 @@ def get_dashboard():
                 "mmr": p.get("mmr", 1000),
                 "rank_title": p.get("rank_title",""),
                 "is_mod": p["id"] in db["mod_ids"],
-                "partner_req": p.get("partner_req")
+                "partner_req": p.get("partner_req"),
+                "calib_played": safe_int(p.get("calib_played", 0), 0),
+                "calib_wins": safe_int(p.get("calib_wins", 0), 0),
+                "calib_streak": safe_int(p.get("calib_streak", 0), 0)
             })
 
-        # incoming partner req + notifications for uid query
         uid = request.args.get("uid")
         incoming = []
         notis = []
@@ -774,7 +925,7 @@ def get_dashboard():
                     incoming.append({"id": p["id"], "nickname": p.get("nickname",""), "pictureUrl": p.get("pictureUrl","")})
             notis = get_unread_notifications(db, uid, limit=5)
 
-        save_db(db)  # mark prune/merge safe
+        save_db(db)
         return jsonify({
             "system": system,
             "courts": courts_out,
@@ -795,7 +946,6 @@ def get_dashboard():
             "incoming_partner_requests": [], "notifications_unread": []
         })
 
-# ---------------- Notifications ACK ----------------
 @app.route("/api/notifications/ack", methods=["POST"])
 def notifications_ack():
     db = get_db()
@@ -861,6 +1011,8 @@ def respond_partner():
 @app.route("/api/toggle_status", methods=["POST"])
 def toggle_status():
     db = get_db()
+    refresh_courts(db)
+
     d = request.json or {}
     uid = d.get("userId")
     if not uid or uid not in db["players"]:
@@ -880,7 +1032,6 @@ def toggle_status():
         p["status"] = "active"
         p["queue_since"] = now_ts()
         p["last_active"] = now_ts()
-        # add to session participants
         ceid = db["system_settings"].get("current_event_id")
         if ceid and ceid in db["events"]:
             add_participant(db["events"][ceid], uid)
@@ -892,18 +1043,17 @@ def toggle_status():
 @app.route("/api/admin/toggle_session", methods=["POST"])
 def toggle_session():
     db = get_db()
+    refresh_courts(db)
+
     d = request.json or {}
     uid = d.get("userId")
     action = d.get("action")
     if not uid or not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
 
-    refresh_courts(db)
-
     if action == "start":
         db["system_settings"]["is_session_active"] = True
 
-        # create new session event
         eid = str(uuid.uuid4())[:8]
         today = datetime.now().strftime("%d/%m/%Y")
         db["events"][eid] = {
@@ -923,7 +1073,7 @@ def toggle_session():
         for k in db["courts_state"].keys():
             db["courts_state"][k] = None
 
-        # reset everyone
+        # reset players presence (ไม่แตะ calibration/mmr)
         for p in db["players"].values():
             p["status"] = "offline"
             p["partner_req"] = None
@@ -939,9 +1089,11 @@ def toggle_session():
 
         db["system_settings"]["current_event_id"] = None
 
+        # clear courts
         for k in db["courts_state"].keys():
             db["courts_state"][k] = None
 
+        # offline everyone
         for p in db["players"].values():
             p["status"] = "offline"
             p["partner_req"] = None
@@ -949,18 +1101,6 @@ def toggle_session():
 
     save_db(db)
     return jsonify({"success": True})
-
-@app.route("/api/admin/set_auto_match", methods=["POST"])
-def set_auto_match():
-    db = get_db()
-    d = request.json or {}
-    uid = d.get("userId")
-    val = d.get("enabled")
-    if not uid or not is_staff(uid, db):
-        return jsonify({"error": "Unauthorized"}), 403
-    db["system_settings"]["auto_match"] = bool(val)
-    save_db(db)
-    return jsonify({"success": True, "auto_match": db["system_settings"]["auto_match"]})
 
 @app.route("/api/admin/update_courts", methods=["POST"])
 def update_courts():
@@ -971,11 +1111,31 @@ def update_courts():
         return jsonify({"error": "Unauthorized"}), 403
 
     c = safe_int(d.get("count", 2), 2)
-    c = max(1, min(6, c))
+    c = max(1, min(10, c))
     db["system_settings"]["total_courts"] = c
     refresh_courts(db)
     save_db(db)
     return jsonify({"success": True})
+
+@app.route("/api/admin/set_auto_match_court", methods=["POST"])
+def set_auto_match_court():
+    db = get_db()
+    refresh_courts(db)
+
+    d = request.json or {}
+    uid = d.get("userId")
+    if not uid or not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    court_id = str(d.get("courtId"))
+    enabled = bool(d.get("enabled"))
+
+    if court_id not in db["courts_state"]:
+        return jsonify({"error": "Invalid court"}), 400
+
+    db["system_settings"]["auto_match_courts"][court_id] = enabled
+    save_db(db)
+    return jsonify({"success": True, "courtId": court_id, "enabled": enabled})
 
 @app.route("/api/admin/manage_mod", methods=["POST"])
 def manage_mod():
@@ -1019,6 +1179,11 @@ def reset_system():
         p["status"] = "offline"
         p["partner_req"] = None
         p["queue_since"] = None
+        # reset calibration
+        p["games_played"] = 0
+        p["calib_played"] = 0
+        p["calib_wins"] = 0
+        p["calib_streak"] = 0
 
     refresh_courts(db)
     for k in db["courts_state"].keys():
@@ -1046,17 +1211,26 @@ def set_mmr():
         return jsonify({"success": True})
     return jsonify({"error": "Not found"}), 404
 
-# ---------------- Matchmake ----------------
+# ---------------- Matchmake (STAFF ONLY) ----------------
 @app.route("/api/matchmake", methods=["POST"])
 def matchmake():
     db = get_db()
-    res = matchmake_internal(db)
+    refresh_courts(db)
+
+    d = request.json or {}
+    uid = d.get("userId")
+    if not uid or not is_staff(uid, db):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    matches = fill_enabled_courts(db)
     save_db(db)
-    return jsonify(res)
+    return jsonify({"status": "matched" if matches else "waiting", "matched_count": len(matches), "matches": matches})
 
 @app.route("/api/matchmake/manual", methods=["POST"])
 def manual_matchmake():
     db = get_db()
+    refresh_courts(db)
+
     d = request.json or {}
     uid = d.get("userId")
     if not uid or not is_staff(uid, db):
@@ -1064,7 +1238,7 @@ def manual_matchmake():
 
     court_id = d.get("courtId")
     p_ids = d.get("playerIds", [])
-    res = matchmake_internal(db, preferred_court=court_id, manual=True, manual_players=p_ids, created_by=uid)
+    res = matchmake_internal(db, preferred_court=court_id, manual=True, manual_players=p_ids, created_by=uid, only_enabled=False)
     save_db(db)
     if res.get("status") != "matched":
         return jsonify({"error": res.get("status")}), 400
@@ -1073,15 +1247,9 @@ def manual_matchmake():
 # ---------------- Cancel Match ----------------
 @app.route("/api/cancel_match", methods=["POST"])
 def cancel_match():
-    """
-    Cancel an ongoing match:
-    - no mmr change
-    - no match history
-    - rematch immediately (try)
-    - avoid same teammate pairs as canceled match when possible
-    Auth: players in that match OR staff
-    """
     db = get_db()
+    refresh_courts(db)
+
     d = request.json or {}
     uid = d.get("userId")
     court_id = str(d.get("courtId"))
@@ -1089,7 +1257,6 @@ def cancel_match():
     if not uid or not court_id:
         return jsonify({"error": "Missing data"}), 400
 
-    refresh_courts(db)
     match = db["courts_state"].get(court_id)
     if not match:
         return jsonify({"error": "No match"}), 400
@@ -1101,10 +1268,10 @@ def cancel_match():
     if not (is_player or is_staff(uid, db)):
         return jsonify({"error": "Unauthorized"}), 403
 
-    # add avoid constraint (cancel) - stronger TTL
+    # avoid repeat same teams after cancel
     add_avoid(db, "cancel", team_a_ids, team_b_ids, ttl=1800)
 
-    # restore players to active + restore queue/partner snapshots
+    # restore players -> active (no mmr change, no history)
     qsnap = match.get("queue_snapshot", {})
     psnap = match.get("partner_snapshot", {})
     for pid in team_a_ids + team_b_ids:
@@ -1114,31 +1281,29 @@ def cancel_match():
             p["queue_since"] = qsnap.get(pid, p.get("queue_since", now_ts())) if db["system_settings"].get("is_session_active") else None
             p["partner_req"] = psnap.get(pid, None)
 
-    # clear court
     db["courts_state"][court_id] = None
 
-    # rematch immediately on same court
-    rematch = matchmake_internal(db, preferred_court=court_id)
+    # Auto fill enabled courts (prefer the canceled court only if that court enabled)
+    prefer = court_id if db["system_settings"]["auto_match_courts"].get(court_id, False) else None
+    matches = fill_enabled_courts(db, prefer_court=prefer)
+
     save_db(db)
-    return jsonify({"success": True, "rematch": rematch})
+    return jsonify({"success": True, "auto_matches": matches, "matched_count": len(matches)})
 
 # ---------------- Submit Result ----------------
 @app.route("/api/submit_result", methods=["POST"])
 def submit_result():
-    """
-    End match with winner:
-    Auth: players in match OR staff (mod/super)
-    """
     db = get_db()
+    refresh_courts(db)
+
     d = request.json or {}
     uid = d.get("userId")
     court_id = str(d.get("courtId"))
-    winner = d.get("winner")  # "A" or "B"
+    winner = d.get("winner")
 
     if not uid or not court_id or winner not in ("A", "B"):
         return jsonify({"error": "Missing data"}), 400
 
-    refresh_courts(db)
     match = db["courts_state"].get(court_id)
     if not match:
         return jsonify({"error": "No match"}), 400
@@ -1146,6 +1311,7 @@ def submit_result():
     team_a_ids = match.get("team_a_ids", [])
     team_b_ids = match.get("team_b_ids", [])
 
+    # ผู้กดจบต้องเป็นผู้เล่นในแมตช์ หรือ mod/super
     is_player = uid in team_a_ids or uid in team_b_ids
     if not (is_player or is_staff(uid, db)):
         return jsonify({"error": "Unauthorized"}), 403
@@ -1154,23 +1320,50 @@ def submit_result():
     start_time = safe_float(match.get("start_time", end_time), end_time)
     duration_sec = max(0, int(end_time - start_time))
 
-    # MMR update (elo)
     deltas, mmr_meta = compute_team_deltas(team_a_ids, team_b_ids, winner, db["players"])
     snapshot = {}
 
+    # update calibration counters
+    def did_win(pid: str) -> bool:
+        return (winner == "A" and pid in team_a_ids) or (winner == "B" and pid in team_b_ids)
+
+    for pid in team_a_ids + team_b_ids:
+        if pid not in db["players"]:
+            continue
+        p = db["players"][pid]
+        p.setdefault("games_played", 0)
+        p.setdefault("calib_played", 0)
+        p.setdefault("calib_wins", 0)
+        p.setdefault("calib_streak", 0)
+
+        p["games_played"] = safe_int(p["games_played"], 0) + 1
+
+        # calibration only counts first 10 games
+        if safe_int(p["calib_played"], 0) < 10:
+            p["calib_played"] = safe_int(p["calib_played"], 0) + 1
+            if did_win(pid):
+                p["calib_wins"] = safe_int(p["calib_wins"], 0) + 1
+                p["calib_streak"] = safe_int(p["calib_streak"], 0) + 1
+            else:
+                p["calib_streak"] = 0
+
+            # reveal notification at exactly 10
+            if p["calib_played"] == 10:
+                push_notification(db, pid, "✅ Calibration ครบ 10 เกมแล้ว! Rank ถูกเปิดใช้งาน 🎖️", {"type":"calib_done"})
+
+    # apply mmr changes
     for pid, delta in deltas.items():
         if pid not in db["players"]:
             continue
-        old = safe_int(db["players"][pid].get("mmr", 1000), 1000)
+        p = db["players"][pid]
+        old = safe_int(p.get("mmr", 1000), 1000)
         new = max(0, old + int(delta))
-        db["players"][pid]["mmr"] = new
-        db["players"][pid]["status"] = "active" if db["system_settings"].get("is_session_active") else "offline"
-        # after play: reset queue_since to now so others get priority
-        db["players"][pid]["queue_since"] = now_ts() if db["system_settings"].get("is_session_active") else None
-        db["players"][pid]["partner_req"] = None
+        p["mmr"] = new
+        p["status"] = "active" if db["system_settings"].get("is_session_active") else "offline"
+        p["queue_since"] = now_ts() if db["system_settings"].get("is_session_active") else None
+        p["partner_req"] = None
         snapshot[pid] = {"change": f"{int(delta):+d}", "old": old, "new": new}
 
-    # event stats
     ceid = match.get("event_id")
     if ceid and ceid in db["events"]:
         evt = db["events"][ceid]
@@ -1194,20 +1387,15 @@ def submit_result():
     }
     db["match_history"].insert(0, hist)
 
-    # avoid immediate same teams (finish) for a short time
     add_avoid(db, "finish", team_a_ids, team_b_ids, ttl=600)
-
-    # clear court
     db["courts_state"][court_id] = None
 
-    # auto match next
-    auto_on = bool(db["system_settings"].get("auto_match", False))
-    auto_res = None
-    if auto_on:
-        auto_res = matchmake_internal(db, preferred_court=court_id)
+    # Auto fill enabled courts (prefer this court if enabled)
+    prefer = court_id if db["system_settings"]["auto_match_courts"].get(court_id, False) else None
+    matches = fill_enabled_courts(db, prefer_court=prefer)
 
     save_db(db)
-    return jsonify({"success": True, "mmr_meta": mmr_meta, "auto": auto_res})
+    return jsonify({"success": True, "mmr_meta": mmr_meta, "auto_matches": matches, "matched_count": len(matches)})
 
 # ---------------- Events (optional: non-session) ----------------
 @app.route("/api/event/create", methods=["POST"])
@@ -1265,7 +1453,6 @@ def join_event_toggle():
 
     evt = db["events"][eid]
     if evt.get("type") == "session":
-        # session participants are via check-in only
         return jsonify({"error": "Session เข้าร่วมผ่านการ Check-in เท่านั้น"}), 400
 
     evt.setdefault("players", [])
