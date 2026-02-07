@@ -18,7 +18,8 @@ DEFAULT_DB = {
         "total_courts": 2,
         "is_session_active": False,
         "current_event_id": None,
-        "auto_match_courts": {}
+        "auto_match_courts": {},
+        "last_autofill_ts": 0.0
     },
     "mod_ids": [],
     "players": {},
@@ -120,10 +121,9 @@ def refresh_courts(db: dict):
         except:
             pass
 
-# ---------------- RANK / CALIBRATION ----------------
-def is_calibrating(p: dict) -> bool:
-    return safe_int(p.get("calib_played", 0), 0) < 10
+    db["system_settings"].setdefault("last_autofill_ts", 0.0)
 
+# ---------------- RANK / CALIBRATION ----------------
 def rank_title_from_mmr(p: dict):
     mmr = safe_int(p.get("mmr", 1000), 1000)
     cp = safe_int(p.get("calib_played", 0), 0)
@@ -412,6 +412,7 @@ def player_queue_since(p):
     return safe_float(p.get("last_active", 0), 0.0)
 
 def build_groups(active_players: list, players_map: dict, current_event: dict):
+    # partner request grouping
     active_ids = {p["id"] for p in active_players}
     processed = set()
     groups = []
@@ -549,6 +550,7 @@ def best_team_split_for_four(players_map, ids4, groups_in_selected, db, strict_m
             m = split_metrics(players_map, team_a_list, team_b_list)
             repeat_pen = compute_repeat_penalty(db, team_a_list, team_b_list, req_pairs, strict_cancel)
 
+            # priority: avoid repeats, then avoid "carry pair gap", then total diff
             score = (repeat_pen, m["max_gap"], m["total_diff"], m["gap_sum"])
 
             if best is None or score < best_score:
@@ -570,7 +572,7 @@ def choose_match(groups, players_map, current_event, db):
 
     N = min(12, len(groups))
     cand_groups = groups[:N]
-    must_idx = 0
+    must_idx = 0  # first waiting group must be included
 
     best_pick = None
     best_score = None
@@ -603,6 +605,7 @@ def choose_match(groups, players_map, current_event, db):
     if best_pick:
         return best_pick[0], best_pick[1]
 
+    # fallback: first 4 ids then best split
     members = []
     used_groups = []
     for g in groups:
@@ -623,27 +626,33 @@ def enabled_courts(db: dict):
     am = db["system_settings"].get("auto_match_courts", {})
     return [cid for cid in db["courts_state"].keys() if am.get(cid, False)]
 
-def find_free_court(db, preferred=None, only_enabled=False):
+def disabled_courts(db: dict):
     refresh_courts(db)
-    allowed = set(enabled_courts(db)) if only_enabled else set(db["courts_state"].keys())
+    am = db["system_settings"].get("auto_match_courts", {})
+    return [cid for cid in db["courts_state"].keys() if not am.get(cid, False)]
 
-    if preferred is not None:
-        cid = str(preferred)
-        if cid in allowed and cid in db["courts_state"] and db["courts_state"][cid] is None:
-            return cid
-
-    for cid in sorted(list(allowed), key=lambda x: safe_int(x, 999)):
+def find_free_court(db, court_ids_order):
+    refresh_courts(db)
+    for cid in court_ids_order:
         if db["courts_state"].get(cid) is None:
             return cid
     return None
 
-def matchmake_internal(db, preferred_court=None, manual=False, manual_players=None, created_by=None, only_enabled=False):
+def matchmake_internal(db, preferred_court=None, manual=False, manual_players=None, created_by=None, only_courts=None):
+    """
+    only_courts: list[str] of court ids allowed to use (e.g. enabled or disabled group)
+    """
     refresh_courts(db)
 
     if not db["system_settings"].get("is_session_active"):
         return {"status": "session_off"}
 
-    free_court = find_free_court(db, preferred_court, only_enabled=only_enabled)
+    allowed = set(only_courts) if only_courts is not None else set(db["courts_state"].keys())
+    if preferred_court is not None and str(preferred_court) in allowed:
+        free_court = str(preferred_court) if db["courts_state"].get(str(preferred_court)) is None else None
+    else:
+        free_court = find_free_court(db, sorted(list(allowed), key=lambda x: safe_int(x, 999)))
+
     if not free_court:
         return {"status": "full"}
 
@@ -661,7 +670,11 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
         team_a_ids = [pids[0], pids[1]]
         team_b_ids = [pids[2], pids[3]]
     else:
-        active_players = [p for p in db["players"].values() if p.get("status") == "active"]
+        # active & not resting only
+        active_players = [
+            p for p in db["players"].values()
+            if p.get("status") == "active" and not bool(p.get("resting", False))
+        ]
         if len(active_players) < 4:
             return {"status": "waiting"}
 
@@ -673,6 +686,7 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
 
     queue_snapshot = {pid: db["players"][pid].get("queue_since") for pid in (team_a_ids + team_b_ids)}
     partner_snapshot = {pid: db["players"][pid].get("partner_req") for pid in (team_a_ids + team_b_ids)}
+    resting_snapshot = {pid: db["players"][pid].get("resting", False) for pid in (team_a_ids + team_b_ids)}
 
     match_id = str(uuid.uuid4())[:8]
     match_obj = {
@@ -684,7 +698,8 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
         "manual": bool(manual),
         "created_by": created_by,
         "queue_snapshot": queue_snapshot,
-        "partner_snapshot": partner_snapshot
+        "partner_snapshot": partner_snapshot,
+        "resting_snapshot": resting_snapshot
     }
     db["courts_state"][free_court] = match_obj
 
@@ -693,6 +708,7 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
         p["status"] = "playing"
         p["last_active"] = now_ts()
         p["partner_req"] = None
+        p["resting"] = False
         add_participant(current_event, pid)
 
     def name(pid):
@@ -709,25 +725,28 @@ def matchmake_internal(db, preferred_court=None, manual=False, manual_players=No
 
     return {"status": "matched", "courtId": free_court, "matchId": match_id}
 
-def fill_enabled_courts(db, prefer_court=None):
+def fill_courts(db, court_ids, prefer_court=None):
+    """
+    Try to fill courts in court_ids (only those). Returns list of matched results.
+    """
     results = []
     refresh_courts(db)
 
-    enabled = set(enabled_courts(db))
+    allowed = set(court_ids)
 
     if prefer_court is not None:
         pc = str(prefer_court)
-        if pc in enabled and db["courts_state"].get(pc) is None:
-            r = matchmake_internal(db, preferred_court=pc, only_enabled=True)
+        if pc in allowed and db["courts_state"].get(pc) is None:
+            r = matchmake_internal(db, preferred_court=pc, only_courts=list(allowed))
             if r.get("status") == "matched":
                 results.append(r)
 
-    max_iter = len(enabled) * 3
+    max_iter = len(allowed) * 3
     for _ in range(max_iter):
-        free = find_free_court(db, preferred=None, only_enabled=True)
+        free = find_free_court(db, sorted(list(allowed), key=lambda x: safe_int(x, 999)))
         if not free:
             break
-        r = matchmake_internal(db, preferred_court=free, only_enabled=True)
+        r = matchmake_internal(db, preferred_court=free, only_courts=list(allowed))
         if r.get("status") == "matched":
             results.append(r)
             continue
@@ -735,6 +754,43 @@ def fill_enabled_courts(db, prefer_court=None):
             break
 
     return results
+
+def autofill_enabled_courts(db, prefer_court=None):
+    # Automatch ON: fill enabled courts automatically when free / game ends / enough players
+    courts = enabled_courts(db)
+    return fill_courts(db, courts, prefer_court=prefer_court)
+
+def fill_disabled_courts_on_request(db):
+    # Button "จับคู่อัตโนมัติ" => fill courts that are NOT automatch
+    courts = disabled_courts(db)
+    return fill_courts(db, courts, prefer_court=None)
+
+def should_autofill_guarded(db) -> bool:
+    if not db["system_settings"].get("is_session_active"):
+        return False
+
+    # guard window to reduce duplicate autofill on multiple clients polling
+    now = now_ts()
+    last = safe_float(db["system_settings"].get("last_autofill_ts", 0.0), 0.0)
+    if now - last < 2.0:
+        return False
+
+    # only if there is free enabled court and enough active non-rest players
+    refresh_courts(db)
+    enabled = enabled_courts(db)
+    has_free = any(db["courts_state"].get(cid) is None for cid in enabled)
+    if not has_free:
+        return False
+
+    active_non_rest = [
+        p for p in db["players"].values()
+        if p.get("status") == "active" and not bool(p.get("resting", False))
+    ]
+    if len(active_non_rest) < 4:
+        return False
+
+    db["system_settings"]["last_autofill_ts"] = now
+    return True
 
 # ---------------- ROUTES ----------------
 @app.route("/")
@@ -763,6 +819,7 @@ def login():
                 "last_active": now_ts(),
                 "last_seen": now_ts(),
                 "partner_req": None,
+                "resting": False,
                 "games_played": 0,
                 "calib_played": 0,
                 "calib_wins": 0,
@@ -777,6 +834,7 @@ def login():
             p.setdefault("calib_played", 0)
             p.setdefault("calib_wins", 0)
             p.setdefault("calib_streak", 0)
+            p.setdefault("resting", False)
 
         p = db["players"][uid]
         p["role"] = "super" if uid == SUPER_ADMIN_ID else ("mod" if uid in db["mod_ids"] else "user")
@@ -808,13 +866,18 @@ def get_dashboard():
         db = get_db()
         refresh_courts(db)
 
+        # ✅ Automatch ON = auto-fill enabled courts (guarded)
+        if should_autofill_guarded(db):
+            autofill_enabled_courts(db)
+
         system = db.get("system_settings", {})
 
         courts_out = {}
         for cid, match in db["courts_state"].items():
             if match:
                 match_out = dict(match)
-                match_out["elapsed"] = int(now_ts() - safe_float(match.get("start_time", now_ts()), now_ts()))
+                match_out["elapsed_sec"] = int(now_ts() - safe_float(match.get("start_time", now_ts()), now_ts()))
+                match_out["elapsed_min"] = match_out["elapsed_sec"] // 60
                 match_out["team_a_data"] = []
                 match_out["team_b_data"] = []
                 for uid in match.get("team_a_ids", []):
@@ -836,12 +899,17 @@ def get_dashboard():
             p.setdefault("calib_played", 0)
             p.setdefault("calib_wins", 0)
             p.setdefault("calib_streak", 0)
+            p.setdefault("resting", False)
             p["rank_title"] = rank_title_from_mmr(p)
             p["mmr_display"] = mmr_display(p)
             players_list.append(p)
 
+        # queue = active/playing/resting display
         queue = [p for p in players_list if p.get("status") in ("active", "playing")]
         queue.sort(key=lambda x: (player_queue_since(x), safe_int(x.get("calib_played", 0), 0), safe_int(x.get("mmr", 1000), 1000)))
+
+        # count "waiting" = active and not resting
+        queue_count = len([p for p in players_list if p.get("status") == "active" and not bool(p.get("resting", False))])
 
         leaderboard = sorted(players_list, key=lambda x: x.get("mmr", 1000), reverse=True)
 
@@ -879,6 +947,7 @@ def get_dashboard():
                 "pictureUrl": p.get("pictureUrl",""),
                 "status": p.get("status","offline"),
                 "queue_since": p.get("queue_since"),
+                "resting": bool(p.get("resting", False)),
                 "mmr": p.get("mmr", 1000),
                 "mmr_display": p.get("mmr_display", str(p.get("mmr", 1000))),
                 "rank_title": p.get("rank_title",""),
@@ -903,7 +972,7 @@ def get_dashboard():
             "system": system,
             "courts": courts_out,
             "queue": queue,
-            "queue_count": len([p for p in queue if p.get("status") == "active"]),
+            "queue_count": queue_count,
             "events": event_list,
             "leaderboard": leaderboard,
             "match_history": db.get("match_history", [])[:20],
@@ -944,6 +1013,8 @@ def request_partner():
         return jsonify({"error": "User not found"}), 404
     if db["players"][uid].get("status") != "active":
         return jsonify({"error": "ต้อง Check-in ก่อนนะครับ"}), 400
+    if bool(db["players"][uid].get("resting", False)):
+        return jsonify({"error": "ตอนนี้คุณพักเหนื่อยอยู่ ต้องกลับเข้าคิวก่อน"}), 400
 
     db["players"][uid]["partner_req"] = target
     save_db(db)
@@ -971,8 +1042,11 @@ def respond_partner():
         return jsonify({"error": "Missing/invalid data"}), 400
 
     if action == "accept":
+        # both sides request => keep same team
         db["players"][uid]["partner_req"] = rid
         db["players"][rid]["partner_req"] = uid
+        db["players"][uid]["resting"] = False
+        db["players"][rid]["resting"] = False
     else:
         if db["players"][rid].get("partner_req") == uid:
             db["players"][rid]["partner_req"] = None
@@ -980,7 +1054,7 @@ def respond_partner():
     save_db(db)
     return jsonify({"success": True})
 
-# ---------------- Toggle Status ----------------
+# ---------------- Toggle Status / Rest ----------------
 @app.route("/api/toggle_status", methods=["POST"])
 def toggle_status():
     db = get_db()
@@ -1001,16 +1075,48 @@ def toggle_status():
         p["status"] = "offline"
         p["partner_req"] = None
         p["queue_since"] = None
+        p["resting"] = False
     else:
         p["status"] = "active"
         p["queue_since"] = now_ts()
         p["last_active"] = now_ts()
+        p["resting"] = False
         ceid = db["system_settings"].get("current_event_id")
         if ceid and ceid in db["events"]:
             add_participant(db["events"][ceid], uid)
 
+        # ✅ AutoMatch ON courts should fill without pressing any button
+        autofill_enabled_courts(db)
+
     save_db(db)
     return jsonify({"success": True})
+
+@app.route("/api/toggle_rest", methods=["POST"])
+def toggle_rest():
+    db = get_db()
+    refresh_courts(db)
+    d = request.json or {}
+    uid = d.get("userId")
+
+    if not uid or uid not in db["players"]:
+        return jsonify({"error": "User not found"}), 404
+    if not db["system_settings"].get("is_session_active"):
+        return jsonify({"error": "Session not active"}), 400
+
+    p = db["players"][uid]
+    if p.get("status") != "active":
+        return jsonify({"error": "ต้องอยู่สถานะรอคิวก่อน"}), 400
+
+    p["resting"] = not bool(p.get("resting", False))
+    # queue_since stays the same so waiting time continues
+    if p["resting"]:
+        p["partner_req"] = None  # resting => no pair request
+    else:
+        # back to queue: try autofill enabled courts
+        autofill_enabled_courts(db)
+
+    save_db(db)
+    return jsonify({"success": True, "resting": p["resting"]})
 
 # ---------------- Admin / Session ----------------
 @app.route("/api/admin/toggle_session", methods=["POST"])
@@ -1026,6 +1132,7 @@ def toggle_session():
 
     if action == "start":
         db["system_settings"]["is_session_active"] = True
+        db["system_settings"]["last_autofill_ts"] = 0.0
 
         eid = str(uuid.uuid4())[:8]
         today = datetime.now().strftime("%d/%m/%Y")
@@ -1049,6 +1156,7 @@ def toggle_session():
             p["status"] = "offline"
             p["partner_req"] = None
             p["queue_since"] = None
+            p["resting"] = False
 
     else:
         db["system_settings"]["is_session_active"] = False
@@ -1067,6 +1175,7 @@ def toggle_session():
             p["status"] = "offline"
             p["partner_req"] = None
             p["queue_since"] = None
+            p["resting"] = False
 
     save_db(db)
     return jsonify({"success": True})
@@ -1103,6 +1212,11 @@ def set_auto_match_court():
         return jsonify({"error": "Invalid court"}), 400
 
     db["system_settings"]["auto_match_courts"][court_id] = enabled
+
+    # ✅ if turning ON and court is free => auto match immediately
+    if enabled and db["courts_state"].get(court_id) is None:
+        autofill_enabled_courts(db, prefer_court=court_id)
+
     save_db(db)
     return jsonify({"success": True, "courtId": court_id, "enabled": enabled})
 
@@ -1142,12 +1256,14 @@ def reset_system():
     db["notifications"] = {}
     db["system_settings"]["is_session_active"] = False
     db["system_settings"]["current_event_id"] = None
+    db["system_settings"]["last_autofill_ts"] = 0.0
 
     for p in db["players"].values():
         p["mmr"] = 1000
         p["status"] = "offline"
         p["partner_req"] = None
         p["queue_since"] = None
+        p["resting"] = False
         p["games_played"] = 0
         p["calib_played"] = 0
         p["calib_wins"] = 0
@@ -1175,14 +1291,18 @@ def set_mmr():
 
     if tid in db["players"]:
         db["players"][tid]["mmr"] = max(0, safe_int(new_mmr, 1000))
-        # ไม่แตะ calibration (ยัง unrank อยู่จนกว่าจะครบ 10 เกม)
         save_db(db)
         return jsonify({"success": True})
     return jsonify({"error": "Not found"}), 404
 
-# ---------------- Matchmake (STAFF ONLY) ----------------
+# ---------------- Matchmake (STAFF) ----------------
 @app.route("/api/matchmake", methods=["POST"])
 def matchmake():
+    """
+    ✅ Button meaning:
+    - "จับคู่ไปลงสนามที่ไม่ได้เปิด auto matching"
+    - ถ้า auto ปิดทุกสนาม => ก็ทำงานเหมือนเดิม (เพราะทุกสนามเป็น disabled)
+    """
     db = get_db()
     refresh_courts(db)
 
@@ -1191,7 +1311,7 @@ def matchmake():
     if not uid or not is_staff(uid, db):
         return jsonify({"error": "Unauthorized"}), 403
 
-    matches = fill_enabled_courts(db)
+    matches = fill_disabled_courts_on_request(db)
     save_db(db)
     return jsonify({"status": "matched" if matches else "waiting", "matched_count": len(matches), "matches": matches})
 
@@ -1207,7 +1327,7 @@ def manual_matchmake():
 
     court_id = d.get("courtId")
     p_ids = d.get("playerIds", [])
-    res = matchmake_internal(db, preferred_court=court_id, manual=True, manual_players=p_ids, created_by=uid, only_enabled=False)
+    res = matchmake_internal(db, preferred_court=court_id, manual=True, manual_players=p_ids, created_by=uid, only_courts=list(db["courts_state"].keys()))
     save_db(db)
     if res.get("status") != "matched":
         return jsonify({"error": res.get("status")}), 400
@@ -1241,20 +1361,23 @@ def cancel_match():
 
     qsnap = match.get("queue_snapshot", {})
     psnap = match.get("partner_snapshot", {})
+
     for pid in team_a_ids + team_b_ids:
         if pid in db["players"]:
             p = db["players"][pid]
             p["status"] = "active" if db["system_settings"].get("is_session_active") else "offline"
             p["queue_since"] = qsnap.get(pid, p.get("queue_since", now_ts())) if db["system_settings"].get("is_session_active") else None
             p["partner_req"] = psnap.get(pid, None)
+            p["resting"] = False
 
     db["courts_state"][court_id] = None
 
-    prefer = court_id if db["system_settings"]["auto_match_courts"].get(court_id, False) else None
-    matches = fill_enabled_courts(db, prefer_court=prefer)
+    # ✅ AutoMatch ON: if this court is enabled -> auto refill
+    auto_on = bool(db["system_settings"]["auto_match_courts"].get(court_id, False))
+    auto_matches = autofill_enabled_courts(db, prefer_court=court_id) if auto_on else []
 
     save_db(db)
-    return jsonify({"success": True, "auto_matches": matches, "matched_count": len(matches)})
+    return jsonify({"success": True, "auto_matches": auto_matches, "matched_count": len(auto_matches)})
 
 # ---------------- Submit Result ----------------
 @app.route("/api/submit_result", methods=["POST"])
@@ -1323,6 +1446,7 @@ def submit_result():
         p["status"] = "active" if db["system_settings"].get("is_session_active") else "offline"
         p["queue_since"] = now_ts() if db["system_settings"].get("is_session_active") else None
         p["partner_req"] = None
+        p["resting"] = False
         snapshot[pid] = {"change": f"{int(delta):+d}", "old": old, "new": new}
 
     ceid = match.get("event_id")
@@ -1333,11 +1457,14 @@ def submit_result():
             inc_match_played(evt, pid)
             add_seconds_played(evt, pid, duration_sec)
 
+    # ✅ add duration to history (minutes & seconds stored)
     hist = {
         "event_id": ceid,
         "match_id": match.get("match_id"),
+        "court_id": court_id,
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "duration_sec": duration_sec,
+        "duration_min": int(duration_sec // 60),
         "winner_team": winner,
         "mmr_snapshot": snapshot,
         "mmr_meta": mmr_meta,
@@ -1351,11 +1478,12 @@ def submit_result():
     add_avoid(db, "finish", team_a_ids, team_b_ids, ttl=600)
     db["courts_state"][court_id] = None
 
-    prefer = court_id if db["system_settings"]["auto_match_courts"].get(court_id, False) else None
-    matches = fill_enabled_courts(db, prefer_court=prefer)
+    # ✅ AutoMatch ON: if this court enabled -> auto refill
+    auto_on = bool(db["system_settings"]["auto_match_courts"].get(court_id, False))
+    auto_matches = autofill_enabled_courts(db, prefer_court=court_id) if auto_on else []
 
     save_db(db)
-    return jsonify({"success": True, "mmr_meta": mmr_meta, "auto_matches": matches, "matched_count": len(matches)})
+    return jsonify({"success": True, "mmr_meta": mmr_meta, "auto_matches": auto_matches, "matched_count": len(auto_matches)})
 
 # ---------------- Events (optional) ----------------
 @app.route("/api/event/create", methods=["POST"])
