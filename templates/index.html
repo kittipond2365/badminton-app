@@ -235,9 +235,9 @@
       <input id="evt-location" class="input input-bordered input-sm w-full mb-2" placeholder="📍 สถานที่ (ไม่บังคับ)">
 
       <label class="text-xs text-gray-500 ml-1">เวลาเริ่ม *</label>
-      <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
-      <label class="text-xs text-gray-500 ml-1">เวลาสิ้นสุด (ไม่บังคับ — ปิด session อัตโนมัติ 2 ชม. หลังจบ)</label>
-      <input id="evt-end-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2">
+      <input id="evt-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2" onchange="onEvtStartChange()">
+      <label class="text-xs text-gray-500 ml-1">เวลาสิ้นสุด (ไม่กรอก = เริ่ม +4 ชม. · ปิด session อัตโนมัติ 2 ชม. หลังจบ)</label>
+      <input id="evt-end-time" type="datetime-local" class="input input-bordered input-sm w-full mb-2 opacity-50" disabled>
 
       <div class="grid grid-cols-2 gap-2 mb-2">
         <select id="evt-points" class="select select-bordered select-sm w-full">
@@ -500,6 +500,7 @@
       });
       document.getElementById('tab-btn-'+t).classList.add('tab-active');
       document.getElementById('tab-'+t).classList.remove('hidden');
+      if(t === 'events') initEvtTimeMin();
     }
 
     function switchHistory(mode){
@@ -1459,6 +1460,38 @@
       await refresh();
     }
 
+    // --- Event time constraints ---
+    function toLocalISOString(d){
+      const off = d.getTimezoneOffset();
+      const local = new Date(d.getTime() - off * 60000);
+      return local.toISOString().slice(0,16);
+    }
+
+    function initEvtTimeMin(){
+      const el = document.getElementById('evt-time');
+      if(el) el.min = toLocalISOString(new Date());
+    }
+
+    function onEvtStartChange(){
+      const startEl = document.getElementById('evt-time');
+      const endEl = document.getElementById('evt-end-time');
+      if(!startEl.value){
+        endEl.disabled = true;
+        endEl.classList.add('opacity-50');
+        endEl.value = '';
+        endEl.min = '';
+        return;
+      }
+      // Enable end time, set min = start time
+      endEl.disabled = false;
+      endEl.classList.remove('opacity-50');
+      endEl.min = startEl.value;
+      // If current end is before new start, clear it
+      if(endEl.value && endEl.value <= startEl.value) endEl.value = '';
+      // Refresh start min to current time
+      initEvtTimeMin();
+    }
+
     async function submitNewEvent(){
       const n = document.getElementById('evt-name').value.trim();
       const t = document.getElementById('evt-time').value;
@@ -1470,14 +1503,22 @@
 
       if(!t) return alert("กรุณาระบุเวลาเริ่ม");
       const ts = new Date(t).getTime()/1000;
-      const endTs = tEnd ? new Date(tEnd).getTime()/1000 : null;
 
-      if(endTs && endTs <= ts) return alert("เวลาสิ้นสุดต้องหลังเวลาเริ่ม");
+      // Validate not in past
+      if(ts < Date.now()/1000 - 60) return alert("ไม่สามารถตั้งเวลาเริ่มย้อนหลังได้");
 
-      const body = {userId:user.id, datetime:ts, points:pts, bo:bo, notify:notify};
+      // End time: use input or default to start + 4 hours
+      let endTs;
+      if(tEnd){
+        endTs = new Date(tEnd).getTime()/1000;
+        if(endTs <= ts) return alert("เวลาสิ้นสุดต้องหลังเวลาเริ่ม");
+      } else {
+        endTs = ts + (4 * 3600); // default +4h
+      }
+
+      const body = {userId:user.id, datetime:ts, end_datetime:endTs, points:pts, bo:bo, notify:notify};
       if(n) body.name = n;
       if(loc) body.location = loc;
-      if(endTs) body.end_datetime = endTs;
 
       const r = await (await fetch('/api/event/create',{
         method:'POST', headers:{'Content-Type':'application/json'},
@@ -1488,6 +1529,8 @@
       document.getElementById('evt-name').value = "";
       document.getElementById('evt-time').value = "";
       document.getElementById('evt-end-time').value = "";
+      document.getElementById('evt-end-time').disabled = true;
+      document.getElementById('evt-end-time').classList.add('opacity-50');
       document.getElementById('evt-location').value = "";
       await refresh();
     }

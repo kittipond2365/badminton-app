@@ -1867,19 +1867,27 @@ def event_create():
     except Exception:
         dt = _now()
 
+    # Reject past start time (allow 2 min tolerance)
+    if dt < _now() - 120:
+        return jsonify({"error":"ไม่สามารถตั้งเวลาเริ่มย้อนหลังได้"}), 400
+
     # Name: optional — auto-generate from event date if empty
     name = (d.get("name") or "").strip()
     if not name:
         evt_dt_th = datetime.fromtimestamp(dt, tz=TH_TZ)
         name = f"ก๊วน {evt_dt_th.strftime('%d/%m/%Y')}"
 
-    # End datetime: optional
+    # End datetime: default to start + 4 hours if not provided
     end_dt = d.get("end_datetime")
     if end_dt is not None:
         try:
             end_dt = float(end_dt)
+            if end_dt <= dt:
+                return jsonify({"error":"เวลาสิ้นสุดต้องหลังเวลาเริ่ม"}), 400
         except Exception:
-            end_dt = None
+            end_dt = dt + (4 * 3600)
+    else:
+        end_dt = dt + (4 * 3600)  # default +4h
 
     # Scoring settings
     points = int(d.get("points", 21))
