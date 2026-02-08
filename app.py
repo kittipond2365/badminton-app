@@ -577,7 +577,16 @@ def _best_split_for_four(db, four_ids, now, relax=False):
 
     # Wait score (higher total wait = better = lower total score)
     total_wait_min = sum(_player_wait(db["players"][uid], now) for uid in four_ids) / 60.0
-    s_wait = -W_WAIT * total_wait_min
+    max_individual_wait = max(_player_wait(db["players"][uid], now) for uid in four_ids) / 60.0
+
+    # Starvation prevention: if any player has waited very long,
+    # reduce skill penalty so they eventually get matched.
+    # After 3 min wait, skill weight starts dropping; at 10 min, only 20% remains.
+    starvation_factor = 1.0
+    if max_individual_wait > 3.0:
+        starvation_factor = max(0.2, 1.0 - (max_individual_wait - 3.0) / 8.75)
+
+    s_wait = -W_WAIT * total_wait_min - 120.0 * max_individual_wait
 
     best = None
     for tA, tB in splits:
@@ -590,7 +599,7 @@ def _best_split_for_four(db, four_ids, now, relax=False):
         if not ok:
             continue
 
-        s_skill = _skill_score(db, tA, tB)
+        s_skill = _skill_score(db, tA, tB) * starvation_factor
 
         # Diversity score for this split
         s_div_a = _score_pair_diversity(db, tA, tB, partner_pairs)
@@ -628,6 +637,8 @@ def _choose_four_for_court(db, relax=False):
 
     best_pick = None
     has_alternative = len(cand) > 4
+    # Small pool (≤6): don't reject combos for skill diff — everyone should get a chance
+    small_pool = len(cand) <= 6
 
     for combo in combinations(cand, 4):
         combo = list(combo)
@@ -650,8 +661,8 @@ def _choose_four_for_court(db, relax=False):
         teamA, teamB, score = split
 
         # Hard skill cap: discard extreme unfairness if alternatives exist
-        # (skip this check when relaxed — better to match than to block)
-        if has_alternative and not relax:
+        # Skip this check for small pools — better to match everyone than leave someone out
+        if has_alternative and not relax and not small_pool:
             mmrA = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamA]
             mmrB = [effective_mmr_for_matchmaking(db["players"][i]) for i in teamB]
             if abs(sum(mmrA) - sum(mmrB)) > HARD_SKILL_THRESHOLD:

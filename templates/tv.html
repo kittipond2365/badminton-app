@@ -8,629 +8,234 @@
 <title>izesquad — LIVE</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600;700;900&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{--bg:#0a0e1a;--card:#141929;--card-active:#1a2040;--border:#262d45;--text:#e8eaf0;--text-dim:#6b7394;--blue:#4f7cff;--green:#22c55e;--red:#ef4444;--orange:#f59e0b;--purple:#a78bfa;--cyan:#22d3ee}
+  body{font-family:'Kanit',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
 
-  * { margin:0; padding:0; box-sizing:border-box; }
+  .header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#10152a,var(--bg))}
+  .header-left{display:flex;align-items:center;gap:10px}
+  .logo{font-size:22px;font-weight:900;letter-spacing:-1px;background:linear-gradient(135deg,var(--blue),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .live-dot{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:1px}
+  .live-dot::before{content:'';width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse-dot 1.5s ease-in-out infinite}
+  @keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,.6)}50%{opacity:.7;box-shadow:0 0 0 6px rgba(34,197,94,0)}}
+  .header-right{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--text-dim)}
+  .session-badge{padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}
+  .session-on{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+  .session-off{background:rgba(107,115,148,.15);color:var(--text-dim);border:1px solid var(--border)}
+  .clock{font-variant-numeric:tabular-nums;font-weight:600}
 
-  :root {
-    --bg: #0a0e1a;
-    --card: #141929;
-    --card-active: #1a2040;
-    --border: #262d45;
-    --text: #e8eaf0;
-    --text-dim: #6b7394;
-    --blue: #4f7cff;
-    --green: #22c55e;
-    --red: #ef4444;
-    --orange: #f59e0b;
-    --purple: #a78bfa;
-    --cyan: #22d3ee;
-  }
+  .event-bar{padding:6px 20px;background:rgba(79,124,255,.06);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-dim)}
+  .event-bar .ev-name{font-weight:700;color:var(--text)}
+  .event-bar .ev-loc{color:var(--purple)}
 
-  body {
-    font-family: 'Kanit', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+  .courts-grid{display:grid;gap:14px;padding:14px 20px}
+  .courts-1{grid-template-columns:1fr}
+  .courts-2{grid-template-columns:repeat(2,1fr)}
+  .courts-3{grid-template-columns:repeat(3,1fr)}
+  .courts-4{grid-template-columns:repeat(2,1fr)}
+  .courts-5,.courts-6{grid-template-columns:repeat(3,1fr)}
 
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 28px;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, #10152a 0%, var(--bg) 100%);
-  }
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-  .logo {
-    font-size: 28px;
-    font-weight: 900;
-    letter-spacing: -1px;
-    background: linear-gradient(135deg, var(--blue), var(--cyan));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-  }
-  .live-dot {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--green);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-  .live-dot::before {
-    content: '';
-    width: 8px; height: 8px;
-    background: var(--green);
-    border-radius: 50%;
-    animation: pulse-dot 1.5s ease-in-out infinite;
-  }
-  @keyframes pulse-dot {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,.6); }
-    50% { opacity: .7; box-shadow: 0 0 0 8px rgba(34,197,94,0); }
-  }
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 14px;
-    color: var(--text-dim);
-  }
-  .session-badge {
-    display: inline-block;
-    padding: 4px 14px;
-    border-radius: 20px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-  }
-  .session-on { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
-  .session-off { background: rgba(107,115,148,.15); color: var(--text-dim); border: 1px solid var(--border); }
+  .court-card{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .court-card.active{background:var(--card-active);border-color:rgba(79,124,255,.3);box-shadow:0 0 20px rgba(79,124,255,.06)}
+  .court-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
+  .court-label{font-size:17px;font-weight:700}
+  .court-status{font-size:12px;font-weight:600;padding:2px 10px;border-radius:20px}
+  .status-playing{background:rgba(79,124,255,.15);color:var(--blue);border:1px solid rgba(79,124,255,.3)}
+  .status-countdown{background:rgba(245,158,11,.15);color:var(--orange);border:1px solid rgba(245,158,11,.3);animation:blink 1.2s ease-in-out infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+  .status-empty{background:rgba(107,115,148,.1);color:var(--text-dim);border:1px solid var(--border)}
 
-  /* Courts grid */
-  .courts-grid {
-    display: grid;
-    gap: 20px;
-    padding: 24px 28px;
-  }
-  .courts-1 { grid-template-columns: 1fr; }
-  .courts-2 { grid-template-columns: repeat(2, 1fr); }
-  .courts-3 { grid-template-columns: repeat(3, 1fr); }
-  .courts-4 { grid-template-columns: repeat(2, 1fr); }
-  .courts-5, .courts-6 { grid-template-columns: repeat(3, 1fr); }
+  .court-body{padding:14px}
+  .court-body.empty{display:flex;align-items:center;justify-content:center;min-height:80px;color:var(--text-dim);font-size:15px}
 
-  /* Court card */
-  .court-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    overflow: hidden;
-    transition: all .3s ease;
-  }
-  .court-card.active {
-    background: var(--card-active);
-    border-color: rgba(79,124,255,.3);
-    box-shadow: 0 0 30px rgba(79,124,255,.08);
-  }
-  .court-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .court-label {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text);
-  }
-  .court-status {
-    font-size: 14px;
-    font-weight: 600;
-    padding: 4px 14px;
-    border-radius: 20px;
-  }
-  .status-playing {
-    background: rgba(79,124,255,.15);
-    color: var(--blue);
-    border: 1px solid rgba(79,124,255,.3);
-  }
-  .status-countdown {
-    background: rgba(245,158,11,.15);
-    color: var(--orange);
-    border: 1px solid rgba(245,158,11,.3);
-  }
-  .status-empty {
-    background: rgba(107,115,148,.1);
-    color: var(--text-dim);
-    border: 1px solid var(--border);
-  }
-  .court-body { padding: 20px; }
-  .court-body.empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 140px;
-    color: var(--text-dim);
-    font-size: 16px;
-  }
+  .timer-area{text-align:center;margin-bottom:10px}
+  .timer-val{font-size:52px;font-weight:900;font-variant-numeric:tabular-nums;letter-spacing:2px;line-height:1}
+  .timer-val.countdown{color:var(--orange)}
+  .timer-val.playing{color:var(--text)}
+  .timer-label{font-size:10px;color:var(--text-dim);margin-top:2px;text-transform:uppercase;letter-spacing:1px}
 
-  /* Timer */
-  .timer-area {
-    text-align: center;
-    margin-bottom: 16px;
-  }
-  .timer-val {
-    font-size: 48px;
-    font-weight: 900;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 2px;
-    color: var(--text);
-  }
-  .timer-val.countdown { color: var(--orange); }
-  .timer-label {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 2px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
+  .vs-area{display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center}
+  .team{display:flex;flex-direction:column;gap:10px}
+  .team-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:0}
+  .team-a .team-label{color:var(--blue)}
+  .team-b .team-label{color:var(--red)}
+  .team-b{text-align:right}
 
-  /* Teams */
-  .vs-area {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 12px;
-    align-items: center;
-  }
-  .team {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .team-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-bottom: 2px;
-  }
-  .team-a .team-label { color: var(--blue); }
-  .team-b .team-label { color: var(--red); }
-  .team-b { text-align: right; }
+  .player-row{display:flex;align-items:center;gap:10px}
+  .team-b .player-row{flex-direction:row-reverse}
 
-  .player-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .team-b .player-row {
-    flex-direction: row-reverse;
-  }
-  .player-avatar {
-    width: 44px; height: 44px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 2px solid var(--border);
-    background: var(--border);
-  }
-  .team-a .player-avatar { border-color: rgba(79,124,255,.4); }
-  .team-b .player-avatar { border-color: rgba(239,68,68,.4); }
+  .player-avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;border:3px solid var(--border);background:var(--border);flex-shrink:0}
+  .team-a .player-avatar{border-color:rgba(79,124,255,.5)}
+  .team-b .player-avatar{border-color:rgba(239,68,68,.5)}
 
-  .player-info {}
-  .player-name {
-    font-size: 16px;
-    font-weight: 600;
-    line-height: 1.2;
-  }
-  .player-rank {
-    font-size: 11px;
-    color: var(--text-dim);
-  }
+  .player-name{font-size:22px;font-weight:700;line-height:1.15}
+  .player-rank{font-size:12px;color:var(--text-dim)}
 
-  .vs-divider {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .vs-text {
-    font-size: 20px;
-    font-weight: 900;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 2px;
-  }
+  .vs-divider{display:flex;align-items:center;justify-content:center}
+  .vs-text{font-size:20px;font-weight:900;color:var(--text-dim);letter-spacing:2px}
 
-  /* Queue section */
-  .queue-section {
-    padding: 0 28px 24px;
-  }
-  .section-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .section-title .count {
-    background: var(--border);
-    padding: 2px 10px;
-    border-radius: 10px;
-    font-size: 13px;
-    color: var(--text);
-  }
-  .queue-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .queue-chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 8px 14px 8px 8px;
-  }
-  .queue-chip img {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    object-fit: cover;
-    background: var(--border);
-  }
-  .queue-chip .q-name {
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .queue-chip .q-wait {
-    font-size: 11px;
-    color: var(--text-dim);
-  }
-  .queue-chip.next {
-    border-color: rgba(34,197,94,.3);
-    background: rgba(34,197,94,.08);
-  }
-  .queue-chip.next .q-name { color: var(--green); }
+  .bottom-section{padding:6px 20px 12px}
+  .section-title{font-size:13px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .section-title .count{background:var(--border);padding:1px 7px;border-radius:10px;font-size:11px;color:var(--text)}
+  .chip-list{display:flex;flex-wrap:wrap;gap:6px}
 
-  /* Resting */
-  .rest-chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 8px 14px 8px 8px;
-    opacity: .6;
-  }
-  .rest-chip img {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    object-fit: cover;
-    background: var(--border);
-  }
-  .rest-chip .q-name { font-size: 14px; font-weight: 600; }
+  .queue-chip{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:5px 10px 5px 5px}
+  .queue-chip img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--border)}
+  .queue-chip .q-name{font-size:13px;font-weight:600}
+  .queue-chip .q-wait{font-size:10px;color:var(--text-dim)}
+  .queue-chip.next{border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.08)}
+  .queue-chip.next .q-name{color:var(--green)}
 
-  /* Event info */
-  .event-bar {
-    padding: 10px 28px;
-    background: rgba(79,124,255,.06);
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 14px;
-    color: var(--text-dim);
-  }
-  .event-bar .ev-name {
-    font-weight: 700;
-    color: var(--text);
-    font-size: 15px;
-  }
-  .event-bar .ev-loc { color: var(--purple); }
+  .rest-chip{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:5px 10px 5px 5px;opacity:.5}
+  .rest-chip img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--border)}
+  .rest-chip .q-name{font-size:13px;font-weight:600}
 
-  /* Clock */
-  .clock {
-    font-variant-numeric: tabular-nums;
-    font-weight: 600;
-    color: var(--text-dim);
-  }
+  .no-session{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;color:var(--text-dim)}
+  .no-session .emoji{font-size:64px;margin-bottom:16px}
+  .no-session .msg{font-size:22px;font-weight:600}
+  .no-session .sub{font-size:15px;margin-top:8px}
 
-  /* No session */
-  .no-session {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 60vh;
-    text-align: center;
-    color: var(--text-dim);
-  }
-  .no-session .emoji { font-size: 64px; margin-bottom: 16px; }
-  .no-session .msg { font-size: 22px; font-weight: 600; }
-  .no-session .sub { font-size: 15px; margin-top: 8px; }
-
-  /* Responsive */
-  @media (max-width: 768px) {
-    .courts-2, .courts-3 { grid-template-columns: 1fr; }
-    .timer-val { font-size: 36px; }
-    .player-name { font-size: 14px; }
-    .player-avatar { width: 36px; height: 36px; }
+  @media(max-width:768px){
+    .courts-2,.courts-3{grid-template-columns:1fr}
+    .timer-val{font-size:38px}
+    .player-name{font-size:17px}
+    .player-avatar{width:56px;height:56px}
   }
 </style>
 </head>
 <body>
-
 <div class="header">
-  <div class="header-left">
-    <div class="logo">izesquad</div>
-    <span class="live-dot">LIVE</span>
-  </div>
-  <div class="header-right">
-    <span id="session-status" class="session-badge session-off">OFF</span>
-    <span class="clock" id="clock">--:--:--</span>
-  </div>
+  <div class="header-left"><div class="logo">izesquad</div><span class="live-dot">LIVE</span></div>
+  <div class="header-right"><span id="session-status" class="session-badge session-off">OFF</span><span class="clock" id="clock">--:--:--</span></div>
 </div>
-
-<div id="event-bar" class="event-bar" style="display:none">
-  <span>🏸</span>
-  <span class="ev-name" id="ev-name"></span>
-  <span class="ev-loc" id="ev-loc"></span>
-</div>
-
+<div id="event-bar" class="event-bar" style="display:none"><span>🏸</span><span class="ev-name" id="ev-name"></span><span class="ev-loc" id="ev-loc"></span></div>
 <div id="courts-area" class="courts-grid courts-2"></div>
-
-<div id="queue-section" class="queue-section" style="display:none">
-  <div class="section-title">
-    ⏳ คิวรอ <span class="count" id="queue-count">0</span>
-  </div>
-  <div class="queue-list" id="queue-list"></div>
+<div id="queue-section" class="bottom-section" style="display:none">
+  <div class="section-title">⏳ คิวรอ <span class="count" id="queue-count">0</span></div>
+  <div class="chip-list" id="queue-list"></div>
 </div>
-
-<div id="rest-section" class="queue-section" style="display:none">
-  <div class="section-title">
-    😴 พักผ่อน <span class="count" id="rest-count">0</span>
-  </div>
-  <div class="queue-list" id="rest-list"></div>
+<div id="rest-section" class="bottom-section" style="display:none">
+  <div class="section-title">😴 พักผ่อน <span class="count" id="rest-count">0</span></div>
+  <div class="chip-list" id="rest-list"></div>
 </div>
-
 <div id="no-session" class="no-session" style="display:none">
-  <div class="emoji">🏸</div>
-  <div class="msg">ยังไม่มี Session</div>
-  <div class="sub">รอ Admin เปิด Session</div>
+  <div class="emoji">🏸</div><div class="msg">ยังไม่มี Session</div><div class="sub">รอ Admin เปิด Session</div>
 </div>
 
 <script>
-  let dashboard = null;
-  let courtTimers = {};
+let dashboard=null, courtTimers={};
+function updateClock(){const n=new Date();document.getElementById('clock').textContent=[n.getHours(),n.getMinutes(),n.getSeconds()].map(v=>String(v).padStart(2,'0')).join(':')}
+setInterval(updateClock,1000);updateClock();
+function fmtTime(s){s=Math.max(0,Math.floor(s));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+function escHtml(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function imgErr(el){el.src='https://ui-avatars.com/api/?name=?&background=262d45&color=e8eaf0&size=72'}
 
-  // Clock
-  function updateClock() {
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2,'0');
-    const m = String(now.getMinutes()).padStart(2,'0');
-    const s = String(now.getSeconds()).padStart(2,'0');
-    document.getElementById('clock').textContent = `${h}:${m}:${s}`;
-  }
-  setInterval(updateClock, 1000);
-  updateClock();
+async function refresh(){
+  try{const res=await fetch('/api/get_dashboard');if(res.status===304)return;dashboard=await res.json()}catch(e){return}
+  render();
+}
 
-  function fmtTime(sec) {
-    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
-    const ss = String(sec % 60).padStart(2, '0');
-    return `${mm}:${ss}`;
-  }
+function render(){
+  if(!dashboard)return;
+  const active=!!dashboard.system?.is_session_active;
+  const sb=document.getElementById('session-status');
+  sb.textContent=active?'SESSION ON':'OFF';
+  sb.className='session-badge '+(active?'session-on':'session-off');
 
-  function escHtml(s) {
-    const d = document.createElement('div');
-    d.textContent = s || '';
-    return d.innerHTML;
-  }
+  const evBar=document.getElementById('event-bar'),curEvtId=dashboard.system?.current_event_id;
+  if(curEvtId&&dashboard.events){
+    const evt=dashboard.events.find(e=>e.id===curEvtId||e.event_id===curEvtId);
+    if(evt){document.getElementById('ev-name').textContent=evt.name||'Session';document.getElementById('ev-loc').textContent=evt.location?'📍 '+evt.location:'';evBar.style.display='flex'}
+    else evBar.style.display='none';
+  }else evBar.style.display='none';
 
-  function imgErr(el) {
-    el.src = 'https://ui-avatars.com/api/?name=?&background=262d45&color=e8eaf0&size=44';
-  }
+  document.getElementById('no-session').style.display=active?'none':'flex';
 
-  async function refresh() {
-    try {
-      const res = await fetch('/api/get_dashboard');
-      if (res.status === 304) return;
-      dashboard = await res.json();
-    } catch(e) {
-      console.error('TV refresh error:', e);
-      return;
-    }
-    render();
-  }
+  const courtsArea=document.getElementById('courts-area');
+  const courts=dashboard.courts||{};
+  const courtIds=Object.keys(courts).sort((a,b)=>+a-+b);
+  courtsArea.className='courts-grid courts-'+Math.min(courtIds.length||2,6);
 
-  function render() {
-    if (!dashboard) return;
-
-    const active = !!dashboard.system?.is_session_active;
-    const sb = document.getElementById('session-status');
-    sb.textContent = active ? 'SESSION ON' : 'OFF';
-    sb.className = 'session-badge ' + (active ? 'session-on' : 'session-off');
-
-    // Event bar
-    const evBar = document.getElementById('event-bar');
-    const curEvtId = dashboard.system?.current_event_id;
-    if (curEvtId && dashboard.events) {
-      const evt = dashboard.events.find(e => e.id === curEvtId || e.event_id === curEvtId);
-      if (evt) {
-        document.getElementById('ev-name').textContent = evt.name || 'Session';
-        const loc = evt.location;
-        document.getElementById('ev-loc').textContent = loc ? `📍 ${loc}` : '';
-        evBar.style.display = 'flex';
-      } else {
-        evBar.style.display = 'none';
-      }
-    } else {
-      evBar.style.display = 'none';
-    }
-
-    // No session overlay
-    document.getElementById('no-session').style.display = active ? 'none' : 'flex';
-
-    // Courts
-    const courtsArea = document.getElementById('courts-area');
-    const courts = dashboard.courts || {};
-    const courtIds = Object.keys(courts).sort((a,b) => +a - +b);
-    const n = courtIds.length || 2;
-    courtsArea.className = `courts-grid courts-${Math.min(n, 6)}`;
-
-    let html = '';
-    courtIds.forEach(cid => {
-      const m = courts[cid];
-      const isActive = !!m;
-      html += `<div class="court-card ${isActive ? 'active' : ''}">`;
-      html += `<div class="court-header">`;
-      html += `<span class="court-label">🏸 Court ${cid}</span>`;
-      if (!m) {
-        html += `<span class="court-status status-empty">ว่าง</span>`;
-      } else if (!m.started) {
-        html += `<span class="court-status status-countdown">เตรียมตัว</span>`;
-      } else {
-        html += `<span class="court-status status-playing">กำลังเล่น</span>`;
-      }
-      html += `</div>`;
-
-      if (!m) {
-        html += `<div class="court-body empty">— ว่าง —</div>`;
-      } else {
-        html += `<div class="court-body">`;
-
-        // Timer
-        const sec = m.started ? m.elapsed_sec : m.countdown_sec;
-        const cls = m.started ? '' : 'countdown';
-        const label = m.started ? 'เวลาที่เล่น' : 'เริ่มใน';
-        html += `<div class="timer-area">`;
-        html += `<div class="timer-val ${cls}" id="timer-${cid}">${fmtTime(sec)}</div>`;
-        html += `<div class="timer-label">${label}</div>`;
-        html += `</div>`;
-
-        // Teams VS
-        html += `<div class="vs-area">`;
-        html += `<div class="team team-a"><div class="team-label">Team A</div>`;
-        (m.team_a || []).forEach(p => {
-          html += `<div class="player-row">`;
-          html += `<img class="player-avatar" src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)">`;
-          html += `<div class="player-info">`;
-          html += `<div class="player-name">${escHtml(p.nickname)}</div>`;
-          html += `<div class="player-rank">${p.unranked ? p.mmr_display : p.rank_title}</div>`;
-          html += `</div></div>`;
-        });
-        html += `</div>`;
-
-        html += `<div class="vs-divider"><span class="vs-text">VS</span></div>`;
-
-        html += `<div class="team team-b"><div class="team-label">Team B</div>`;
-        (m.team_b || []).forEach(p => {
-          html += `<div class="player-row">`;
-          html += `<div class="player-info">`;
-          html += `<div class="player-name">${escHtml(p.nickname)}</div>`;
-          html += `<div class="player-rank">${p.unranked ? p.mmr_display : p.rank_title}</div>`;
-          html += `</div>`;
-          html += `<img class="player-avatar" src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)">`;
-          html += `</div>`;
-        });
-        html += `</div>`;
-        html += `</div>`; // vs-area
-
-        html += `</div>`; // court-body
-      }
-      html += `</div>`; // court-card
-    });
-    courtsArea.innerHTML = html;
-
-    // Store timer data for client-side ticking
-    courtTimers = {};
-    courtIds.forEach(cid => {
-      const m = courts[cid];
-      if (m) {
-        courtTimers[cid] = {
-          started: m.started,
-          elapsed: m.elapsed_sec,
-          countdown: m.countdown_sec,
-          lastTick: Date.now()
-        };
-      }
-    });
-
-    // Queue
-    const queue = dashboard.queue || [];
-    const qSec = document.getElementById('queue-section');
-    document.getElementById('queue-count').textContent = queue.length;
-    if (queue.length > 0 && active) {
-      qSec.style.display = 'block';
-      let qhtml = '';
-      queue.forEach((p, i) => {
-        const isNext = i < 4;
-        qhtml += `<div class="queue-chip ${isNext ? 'next' : ''}">`;
-        qhtml += `<img src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)">`;
-        qhtml += `<div>`;
-        qhtml += `<div class="q-name">${escHtml(p.nickname)}</div>`;
-        qhtml += `<div class="q-wait">${p.wait_min || 0} นาที</div>`;
-        qhtml += `</div></div>`;
+  let html='';
+  courtIds.forEach(cid=>{
+    const m=courts[cid];
+    html+=`<div class="court-card ${m?'active':''}">`;
+    html+=`<div class="court-header"><span class="court-label">🏸 Court ${cid}</span>`;
+    if(!m)html+=`<span class="court-status status-empty">ว่าง</span>`;
+    else if(!m.started)html+=`<span class="court-status status-countdown">เตรียมตัว</span>`;
+    else html+=`<span class="court-status status-playing">กำลังเล่น</span>`;
+    html+=`</div>`;
+    if(!m){html+=`<div class="court-body empty">— ว่าง —</div>`}
+    else{
+      html+=`<div class="court-body">`;
+      const timerCls=m.started?'playing':'countdown';
+      const timerLbl=m.started?'เวลาที่เล่น':'เริ่มใน';
+      const initSec=m.started?m.elapsed_sec:m.countdown_sec;
+      html+=`<div class="timer-area"><div class="timer-val ${timerCls}" id="timer-${cid}">${fmtTime(initSec)}</div><div class="timer-label">${timerLbl}</div></div>`;
+      html+=`<div class="vs-area"><div class="team team-a"><div class="team-label">Team A</div>`;
+      (m.team_a||[]).forEach(p=>{
+        html+=`<div class="player-row"><img class="player-avatar" src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)"><div><div class="player-name">${escHtml(p.nickname)}</div><div class="player-rank">${p.unranked?p.mmr_display:p.rank_title}</div></div></div>`;
       });
-      document.getElementById('queue-list').innerHTML = qhtml;
-    } else {
-      qSec.style.display = 'none';
-    }
-
-    // Resting
-    const resting = dashboard.resting || [];
-    const rSec = document.getElementById('rest-section');
-    document.getElementById('rest-count').textContent = resting.length;
-    if (resting.length > 0 && active) {
-      rSec.style.display = 'block';
-      let rhtml = '';
-      resting.forEach(p => {
-        rhtml += `<div class="rest-chip">`;
-        rhtml += `<img src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)">`;
-        rhtml += `<div>`;
-        rhtml += `<div class="q-name">${escHtml(p.nickname)}</div>`;
-        rhtml += `</div></div>`;
+      html+=`</div><div class="vs-divider"><span class="vs-text">VS</span></div><div class="team team-b"><div class="team-label">Team B</div>`;
+      (m.team_b||[]).forEach(p=>{
+        html+=`<div class="player-row"><div><div class="player-name">${escHtml(p.nickname)}</div><div class="player-rank">${p.unranked?p.mmr_display:p.rank_title}</div></div><img class="player-avatar" src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)"></div>`;
       });
-      document.getElementById('rest-list').innerHTML = rhtml;
-    } else {
-      rSec.style.display = 'none';
+      html+=`</div></div></div>`;
     }
-  }
+    html+=`</div>`;
+  });
+  courtsArea.innerHTML=html;
 
-  // Client-side timer ticking (every 1s)
-  function tickTimers() {
-    const now = Date.now();
-    for (const cid in courtTimers) {
-      const t = courtTimers[cid];
-      const delta = Math.floor((now - t.lastTick) / 1000);
-      const el = document.getElementById(`timer-${cid}`);
-      if (!el) continue;
-      if (t.started) {
-        el.textContent = fmtTime(t.elapsed + delta);
-      } else {
-        el.textContent = fmtTime(Math.max(0, t.countdown - delta));
+  // Store timer reference time for smooth client-side ticking
+  courtTimers={};
+  courtIds.forEach(cid=>{
+    const m=courts[cid];
+    if(m) courtTimers[cid]={started:m.started, serverElapsed:m.elapsed_sec, serverCountdown:m.countdown_sec, refTime:Date.now()};
+  });
+
+  // Queue
+  const queue=dashboard.queue||[];
+  const qSec=document.getElementById('queue-section');
+  document.getElementById('queue-count').textContent=queue.length;
+  if(queue.length>0&&active){
+    qSec.style.display='block';
+    document.getElementById('queue-list').innerHTML=queue.map((p,i)=>`<div class="queue-chip ${i<4?'next':''}"><img src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)"><div><div class="q-name">${escHtml(p.nickname)}</div><div class="q-wait">${p.wait_min||0} นาที</div></div></div>`).join('');
+  }else qSec.style.display='none';
+
+  const resting=dashboard.resting||[];
+  const rSec=document.getElementById('rest-section');
+  document.getElementById('rest-count').textContent=resting.length;
+  if(resting.length>0&&active){
+    rSec.style.display='block';
+    document.getElementById('rest-list').innerHTML=resting.map(p=>`<div class="rest-chip"><img src="${escHtml(p.pictureUrl)}" onerror="imgErr(this)"><div><div class="q-name">${escHtml(p.nickname)}</div></div></div>`).join('');
+  }else rSec.style.display='none';
+}
+
+// Smooth client-side timer ticking based on elapsed time since last refresh
+function tickTimers(){
+  const now=Date.now();
+  for(const cid in courtTimers){
+    const t=courtTimers[cid], el=document.getElementById('timer-'+cid);
+    if(!el)continue;
+    const delta=(now-t.refTime)/1000;
+    if(t.started){
+      el.textContent=fmtTime(t.serverElapsed+delta);
+    }else{
+      const remain=t.serverCountdown-delta;
+      if(remain<=0){
+        // Countdown finished → switch to playing mode (count up from 0)
+        el.textContent=fmtTime(Math.abs(remain));
+        el.className='timer-val playing';
+        t.started=true; t.serverElapsed=0; t.refTime=now;
+      }else{
+        el.textContent=fmtTime(remain);
       }
     }
   }
-  setInterval(tickTimers, 1000);
-
-  // Poll
-  refresh();
-  setInterval(() => refresh().catch(e => console.error(e)), 6000);
+}
+setInterval(tickTimers,500);
+refresh();
+setInterval(()=>refresh().catch(()=>{}),6000);
 </script>
-
 </body>
 </html>

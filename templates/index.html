@@ -1149,6 +1149,12 @@
       return p ? p.nickname : "Unknown";
     }
 
+    function lookupPic(uid){
+      if(!dashboard || !dashboard.all_players) return "";
+      const p = dashboard.all_players.find(x=>x.id===uid);
+      return p ? p.pictureUrl : "";
+    }
+
     async function requestPartner(){
       const targetId = document.getElementById('partner-select').value;
       if(!targetId) return alert("เลือกเพื่อนก่อนครับ");
@@ -1780,6 +1786,18 @@
         `;
       }).join('');
 
+      // Helper: compute set score display for BO2/BO3
+      function matchSetInfo(m) {
+        const sets = m.set_scores || [];
+        const bo = sets.length <= 1 ? 1 : (sets.length === 3 ? 3 : 2);
+        const setsA = sets.filter(s => s.a > s.b).length;
+        const setsB = sets.filter(s => s.b > s.a).length;
+        const isDraw = bo === 2 && setsA === setsB;
+        const setScoreStr = bo > 1 ? `${setsA}-${setsB}` : '';
+        const perSetStr = sets.map(s => `${s.a}-${s.b}`).join(' | ');
+        return { bo, setsA, setsB, isDraw, setScoreStr, perSetStr };
+      }
+
       const myId = user.id;
       const filtered = hist.filter(m=>{
         if(!m) return false;
@@ -1800,38 +1818,72 @@
         const iWon = meSide ? (meSide === winSide) : null;
 
         const myDelta = (m.mmr_changes && m.mmr_changes[myId] != null) ? m.mmr_changes[myId] : null;
-        // Hide MMR delta for unranked players (calibration phase)
         const showDelta = historyMode === "my" && myDelta != null && !user.unranked;
         const deltaHtml = showDelta
           ? `<span class="font-black ${myDelta>=0?'text-green-600':'text-red-500'}">${myDelta>=0?'+':''}${myDelta}</span>`
           : ``;
 
-        const scoreLine = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(' | ');
         const durMin = Math.floor((m.duration_sec||0)/60);
+        const si = matchSetInfo(m);
 
-        // BUG FIX: highlight winning team in history
         const teamAWon = winSide === "A";
         const teamBWon = winSide === "B";
+
+        // Team A label with WIN indicator
+        let teamALabel = '';
+        let teamBLabel = '';
+        if(historyMode === "global") {
+          if(si.isDraw) {
+            teamALabel = `<span class="text-[10px] font-bold text-yellow-500">DRAW</span>`;
+            teamBLabel = `<span class="text-[10px] font-bold text-yellow-500">DRAW</span>`;
+          } else {
+            teamALabel = teamAWon ? `<span class="text-[10px] font-bold text-green-600">WIN</span>` : '';
+            teamBLabel = teamBWon ? `<span class="text-[10px] font-bold text-green-600">WIN</span>` : '';
+          }
+        }
+
+        // My mode: show badge
+        let myBadgeHtml = '';
+        if(historyMode === "my" && meSide) {
+          if(si.isDraw) {
+            myBadgeHtml = `<span class="badge badge-warning badge-sm">DRAW</span>`;
+          } else {
+            myBadgeHtml = `<span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>`;
+          }
+        }
+
+        // Set score display
+        let setHtml = '';
+        if(si.bo > 1) {
+          setHtml = `<span class="text-xs font-bold">${si.isDraw ? 'DRAW' : 'SET'} ${si.setScoreStr}</span> <span class="text-xs text-gray-400">(${si.perSetStr})</span>`;
+        } else {
+          setHtml = `<span class="text-xs text-gray-600">${si.perSetStr}</span>`;
+        }
 
         return `
           <div class="bg-white border rounded p-3 shadow-sm">
             <div class="flex justify-between items-center mb-2">
               <div class="text-xs text-gray-500">${new Date((m.end_at||m.created_at||0)*1000).toLocaleString('th-TH',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})} · ${durMin}m · Court ${m.court_id||'?'}</div>
               <div class="flex items-center gap-2">
-                ${historyMode === "my" && meSide ? `<span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>` : ``}
-                ${historyMode === "global" ? `<span class="badge badge-outline badge-sm">WIN ${winSide}</span>` : ``}
+                ${myBadgeHtml}
                 ${deltaHtml}
               </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
-              <div class="space-y-2 ${teamAWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_a_ids||[])}</div>
-              <div class="space-y-2 ${teamBWon ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_b_ids||[])}</div>
+            <div class="grid grid-cols-[1fr_auto_1fr] gap-2 items-start">
+              <div>
+                <div class="flex items-center gap-1 mb-1">${teamALabel}</div>
+                <div class="space-y-2 ${teamAWon && !si.isDraw ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_a_ids||[])}</div>
+              </div>
+              <div class="text-xs font-bold text-gray-400 pt-4">VS</div>
+              <div>
+                <div class="flex items-center gap-1 mb-1 justify-end">${teamBLabel}</div>
+                <div class="space-y-2 ${teamBWon && !si.isDraw ? 'bg-green-50 rounded p-1' : ''}">${renderTeam(m.team_b_ids||[])}</div>
+              </div>
             </div>
 
-            <div class="mt-2 text-xs text-gray-600 flex justify-between">
-              <span><b>Score:</b> ${scoreLine}</span>
-              <span><b>Total:</b> ${m.total_points_a}-${m.total_points_b}</span>
+            <div class="mt-2 text-center">
+              ${setHtml}
             </div>
           </div>
         `;
@@ -2040,26 +2092,63 @@
           lastBox.innerHTML = last.filter(m=>m&&m.team_a_ids&&m.team_b_ids).map(m=>{
             const isA = (m.team_a_ids||[]).includes(r.id);
             const meSide = isA ? "A" : "B";
-            const iWon = m.winner === meSide;
+            const winSide = m.winner;
             const delta = (m.mmr_changes && m.mmr_changes[r.id]!=null) ? m.mmr_changes[r.id] : 0;
-            // Hide MMR delta for unranked players
             const showDelta = !r.unranked;
-            const score = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(" | ");
 
-            // BUG FIX: show teammate and opponent names
-            const teammates = (isA ? (m.team_a_ids||[]) : (m.team_b_ids||[])).filter(id=>id!==r.id);
-            const opponents = isA ? (m.team_b_ids||[]) : (m.team_a_ids||[]);
-            const tmName = teammates.map(id=>lookupName(id)).join(', ');
-            const oppName = opponents.map(id=>lookupName(id)).join(', ');
+            // Set info
+            const sets = m.set_scores || [];
+            const bo = sets.length <= 1 ? 1 : (sets.length === 3 ? 3 : 2);
+            const setsA = sets.filter(s => s.a > s.b).length;
+            const setsB = sets.filter(s => s.b > s.a).length;
+            const isDraw = bo === 2 && setsA === setsB;
+            const perSetStr = sets.map(s => `${s.a}-${s.b}`).join(' | ');
+
+            let resultBadge;
+            if(isDraw) {
+              resultBadge = `<span class="badge badge-warning badge-sm">DRAW</span>`;
+            } else {
+              const iWon = meSide === winSide;
+              resultBadge = `<span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>`;
+            }
+
+            const teamAWon = winSide === "A" && !isDraw;
+            const teamBWon = winSide === "B" && !isDraw;
+
+            // Render team players with avatars
+            const renderPfTeam = (ids) => ids.map(uid => {
+              const isMe = uid === r.id;
+              const name = lookupName(uid);
+              const pic = lookupPic(uid);
+              return `<div class="flex items-center gap-1.5">
+                <img src="${pic||'https://ui-avatars.com/api/?name=?'}" class="w-5 h-5 rounded-full">
+                <span class="text-[11px] ${isMe ? 'font-bold text-blue-600' : 'font-medium'}">${name}</span>
+              </div>`;
+            }).join('');
+
+            // Set score display
+            let setHtml = '';
+            if(bo > 1) {
+              setHtml = `<span class="text-[10px] font-bold">${isDraw ? 'DRAW' : 'SET'} ${setsA}-${setsB}</span> <span class="text-[10px] text-gray-400">(${perSetStr})</span>`;
+            } else {
+              setHtml = `<span class="text-[10px] text-gray-500">${perSetStr}</span>`;
+            }
 
             return `
-              <div class="bg-slate-50 border rounded p-2 text-xs">
-                <div class="flex justify-between items-center">
-                  <span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>
-                  ${showDelta ? `<span class="font-black ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>` : ''}
+              <div class="bg-slate-50 border rounded p-2">
+                <div class="flex justify-between items-center mb-1.5">
+                  <div class="flex items-center gap-2">
+                    ${resultBadge}
+                    ${showDelta ? `<span class="font-black text-[11px] ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>` : ''}
+                  </div>
+                  <span class="text-[10px] text-gray-400">Court ${m.court_id||'?'}</span>
                 </div>
-                <div class="text-gray-500 mt-1">คู่: ${tmName || '-'} | vs ${oppName || '-'}</div>
-                <div class="text-gray-600 mt-1">Score: ${score} · Total: ${m.total_points_a}-${m.total_points_b}</div>
+                <div class="grid grid-cols-[1fr_auto_1fr] gap-1 items-start">
+                  <div class="space-y-1 ${teamAWon?'bg-green-50 rounded p-0.5':''}">${renderPfTeam(m.team_a_ids||[])}</div>
+                  <div class="text-[9px] font-bold text-gray-400 pt-1">VS</div>
+                  <div class="space-y-1 ${teamBWon?'bg-green-50 rounded p-0.5':''}">${renderPfTeam(m.team_b_ids||[])}</div>
+                </div>
+                <div class="text-center mt-1">${setHtml}</div>
               </div>
             `;
           }).join('');
