@@ -751,6 +751,7 @@
         const me = dashboard.all_players.find(p=>p.id===user.id);
         if(me){
           user.status = me.status;
+          user.unranked = me.unranked;
           user.mmr_display = me.unranked ? `UNRANK (${me.calib_played}/10)` : String(me.mmr);
           user.rank_title = me.rank_title;
           user.rank_color = me.rank_color;
@@ -1799,7 +1800,9 @@
         const iWon = meSide ? (meSide === winSide) : null;
 
         const myDelta = (m.mmr_changes && m.mmr_changes[myId] != null) ? m.mmr_changes[myId] : null;
-        const deltaHtml = (historyMode === "my" && myDelta != null)
+        // Hide MMR delta for unranked players (calibration phase)
+        const showDelta = historyMode === "my" && myDelta != null && !user.unranked;
+        const deltaHtml = showDelta
           ? `<span class="font-black ${myDelta>=0?'text-green-600':'text-red-500'}">${myDelta>=0?'+':''}${myDelta}</span>`
           : ``;
 
@@ -2039,6 +2042,8 @@
             const meSide = isA ? "A" : "B";
             const iWon = m.winner === meSide;
             const delta = (m.mmr_changes && m.mmr_changes[r.id]!=null) ? m.mmr_changes[r.id] : 0;
+            // Hide MMR delta for unranked players
+            const showDelta = !r.unranked;
             const score = (m.set_scores||[]).map(s=>`${s.a}-${s.b}`).join(" | ");
 
             // BUG FIX: show teammate and opponent names
@@ -2051,7 +2056,7 @@
               <div class="bg-slate-50 border rounded p-2 text-xs">
                 <div class="flex justify-between items-center">
                   <span class="badge ${iWon?'badge-success':'badge-error'} badge-sm">${iWon?'WIN':'LOSS'}</span>
-                  <span class="font-black ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>
+                  ${showDelta ? `<span class="font-black ${delta>=0?'text-green-600':'text-red-500'}">${delta>=0?'+':''}${delta}</span>` : ''}
                 </div>
                 <div class="text-gray-500 mt-1">คู่: ${tmName || '-'} | vs ${oppName || '-'}</div>
                 <div class="text-gray-600 mt-1">Score: ${score} · Total: ${m.total_points_a}-${m.total_points_b}</div>
