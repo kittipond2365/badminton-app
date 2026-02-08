@@ -219,6 +219,7 @@ def _ensure_player(p, uid):
     p.setdefault("queue_join_ts", 0.0)
     p.setdefault("cooldown_until", 0.0)
     p.setdefault("auto_rest", False)
+    p.setdefault("rest_since", 0.0)           # when auto_rest started
     p.setdefault("priority_match", False)  # mod can set to skip queue
     p.setdefault("bio", "")               # self-intro text (max 150 chars)
     p.setdefault("racket", "")            # racket model name
@@ -407,8 +408,6 @@ def _eligible_players(db):
     for p in db["players"].values():
         if p.get("status") != "queue":
             continue
-        if float(p.get("cooldown_until", 0)) > now:
-            continue
         players.append(p)
     # sort by queue time (oldest first)
     players.sort(key=lambda x: float(x.get("queue_join_ts", now)))
@@ -425,7 +424,7 @@ def _pair_units(db, players_sorted):
         paired = p.get("paired_with")
         if paired and paired in db["players"]:
             q = db["players"][paired]
-            if q.get("status") == "queue" and float(q.get("cooldown_until", 0)) <= _now():
+            if q.get("status") == "queue":
                 ts = min(float(p.get("queue_join_ts", _now())), float(q.get("queue_join_ts", _now())))
                 units.append({"members": [p, q], "ts": ts, "size": 2})
                 seen.add(uid); seen.add(paired)
@@ -771,6 +770,8 @@ def _maybe_run_automatch(db):
     """Run automatch for any empty court with automatch on."""
     if not db["system_settings"].get("is_session_active"):
         return False
+    # Wake resting players if needed to fill courts
+    _auto_wake_if_needed(db)
     changed = False
     for cid, state in db["courts"].items():
         if state is not None:
@@ -781,8 +782,18 @@ def _maybe_run_automatch(db):
         if not pick:
             continue
         _create_match_on_court(db, cid, pick["teamA"], pick["teamB"], reason="automatch")
+        # After creating match, wake remaining resting players (they rested 1 round)
+        _wake_after_match_created(db)
         changed = True
     return changed
+
+def _wake_after_match_created(db):
+    """After a new match starts, wake all auto_rest resting players — they've rested 1 round."""
+    for p in db["players"].values():
+        if p.get("status") == "resting" and p.get("auto_rest"):
+            p["status"] = "queue"
+            p["queue_join_ts"] = float(p.get("rest_since", _now()))
+            p["cooldown_until"] = 0.0
 
 # =========================
 # Scoring / MMR
@@ -1032,20 +1043,39 @@ def _recompute_avg_match_minutes(db):
     db["system_settings"]["avg_match_minutes"] = int(round(avg))
     return int(round(avg))
 
-def _cooldown_minutes(db):
-    avg = int(db["system_settings"].get("avg_match_minutes", 12))
-    total_courts = int(db["system_settings"].get("total_courts", 2))
-    active = 0
-    for p in db["players"].values():
-        if p.get("status") in ["queue", "resting", "playing"]:
-            active += 1
-    denom = max(1, total_courts * 4)
-    ratio = active / denom
-    cd = int(round(avg * min(1.8, ratio)))
-    cd = max(0, min(25, cd))
-    if active <= denom:
-        cd = 0
-    return cd
+def _auto_wake_if_needed(db):
+    """Wake resting players back to queue if not enough players to fill empty courts.
+    Returns number of players woken up."""
+    if not db["system_settings"].get("is_session_active"):
+        return 0
+
+    # Count empty courts
+    empty_courts = sum(1 for cid, s in db["courts"].items() if s is None)
+    if empty_courts == 0:
+        return 0
+
+    # Count queue players (eligible)
+    queue_count = sum(1 for p in db["players"].values() if p.get("status") == "queue")
+    need = empty_courts * 4
+
+    if queue_count >= need:
+        return 0  # enough players, no wake needed
+
+    # Find resting players, sorted by rest_since (oldest first = rested longest)
+    resting = [p for p in db["players"].values() if p.get("status") == "resting"]
+    resting.sort(key=lambda p: float(p.get("rest_since", 0)))
+
+    woken = 0
+    for p in resting:
+        if queue_count >= need:
+            break
+        p["status"] = "queue"
+        p["queue_join_ts"] = float(p.get("rest_since", _now()))  # preserve original wait time
+        p["cooldown_until"] = 0.0
+        queue_count += 1
+        woken += 1
+
+    return woken
 
 def _maybe_auto_start_scheduled_event(db):
     """Check if any open event's scheduled time has arrived → auto-start session."""
@@ -1672,6 +1702,9 @@ def matchmake():
     if not db["system_settings"].get("is_session_active"):
         return jsonify({"error":"Session not active"}), 400
 
+    # Wake resting players if needed
+    _auto_wake_if_needed(db)
+
     changed = False
 
     def try_fill(cid):
@@ -1682,6 +1715,7 @@ def matchmake():
         if not pick:
             return
         _create_match_on_court(db, str(cid), pick["teamA"], pick["teamB"], reason="manual_button")
+        _wake_after_match_created(db)
         changed = True
 
     if court_id:
@@ -1722,6 +1756,7 @@ def manual_matchmake():
     teamA = [pids[0], pids[1]]
     teamB = [pids[2], pids[3]]
     _create_match_on_court(db, cid, teamA, teamB, reason="manual_admin")
+    _wake_after_match_created(db)
     save_db_now(db)
     return jsonify({"success": True})
 
@@ -1815,18 +1850,29 @@ def submit_match():
 
     _recompute_avg_match_minutes(db)
 
-    cd_min = _cooldown_minutes(db)
-    cd_sec = cd_min * 60
-    for pid in state.get("team_a_ids", []) + state.get("team_b_ids", []):
+    now = _now()
+    finishing_ids = set(state.get("team_a_ids", []) + state.get("team_b_ids", []))
+
+    # Smart auto_rest: only rest if there are enough OTHER players to fill this court
+    # Count players in queue who are NOT the ones finishing this match
+    queue_others = sum(1 for p in db["players"].values()
+                       if p.get("status") == "queue" and p["id"] not in finishing_ids)
+
+    can_rest = queue_others >= 4  # enough replacements available
+
+    for pid in finishing_ids:
         p = db["players"].get(pid)
         if not p:
             continue
-        p["queue_join_ts"] = now
-        if p.get("auto_rest") and cd_sec > 0:
+        if can_rest and p.get("auto_rest"):
+            # There are enough players to keep playing without us → rest
             p["status"] = "resting"
-            p["cooldown_until"] = now + cd_sec
+            p["rest_since"] = now
+            p["cooldown_until"] = 0.0
         else:
+            # Not enough replacements → everyone back to queue
             p["status"] = "queue"
+            p["queue_join_ts"] = now
             p["cooldown_until"] = 0.0
 
     db["courts"][cid] = None
@@ -1834,7 +1880,7 @@ def submit_match():
     changed = _maybe_run_automatch(db)
 
     save_db_now(db)
-    return jsonify({"success": True, "winner": result["winner"], "cooldown_min": cd_min, "automatch_triggered": changed})
+    return jsonify({"success": True, "winner": result["winner"], "automatch_triggered": changed})
 
 # =========================
 # Admin endpoints
